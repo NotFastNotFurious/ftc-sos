@@ -600,6 +600,9 @@ function buildMatchTable(matches, oprSource) {
     if (m.onField === false) {
       resultCell += ' <span class="predTag" title="Alliance backup — not on the field for this match">(backup)</span>';
     }
+    if (m.dq) {
+      resultCell += ' <span class="predTag" title="This team was disqualified for this match">(DQ)</span>';
+    }
     return `<tr>
     <td>${m.match}</td>
     <td>${displayLevel(m.level)}</td>
@@ -632,6 +635,24 @@ async function fetchJson(url) {
 // still exact, though: see computePlayoffFinish below.
 function finishLabelFor(rank) {
   return rank === 1 ? 'Winner' : rank === 2 ? 'Finalist' : 'Eliminated';
+}
+
+// Playoff DQ handling per the FTC Game Manual (13.6 Playoff MATCHES + T605 Multiple Disqualification):
+// unlike qualification MATCHES — where T501 says a DQ only zeroes the disqualified team's own credit
+// and has no effect on their alliance partner (handled separately, right where quals actual W/L/RP are
+// tallied in run()) — a playoff DQ disqualifies the whole ALLIANCE, and the DQ'd ALLIANCE loses
+// regardless of the raw score. If both alliances show a DQ, the official rule resolves it by whichever
+// was disqualified first chronologically — not something the match data tells us — so this falls back
+// to treating it as a tie, the same as an ordinary tied score.
+function playoffWinnerSide(m, rs, bs) {
+  const redDq = m.teams.some(t => t.alliance === 'Red' && t.dq);
+  const blueDq = m.teams.some(t => t.alliance === 'Blue' && t.dq);
+  if (redDq && blueDq) return null;
+  if (redDq) return 'blue';
+  if (blueDq) return 'red';
+  if (rs > bs) return 'red';
+  if (bs > rs) return 'blue';
+  return null;
 }
 
 // Playoff finish for every team in a normal quals+playoffs event — same id-based elimination-order
@@ -681,7 +702,8 @@ function computePlayoffFinish(matches, isPlayed) {
     const blueKey = allianceKey(m.teams.filter(t => t.alliance === 'Blue').map(t => t.teamNumber));
     allianceWins[redKey] = allianceWins[redKey] || 0;
     allianceWins[blueKey] = allianceWins[blueKey] || 0;
-    if (rs > bs) allianceWins[redKey]++; else if (bs > rs) allianceWins[blueKey]++;
+    const winSide = playoffWinnerSide(m, rs, bs);
+    if (winSide === 'red') allianceWins[redKey]++; else if (winSide === 'blue') allianceWins[blueKey]++;
     const mid = m.id;
     if (mid != null) {
       if (lastIdByKey[redKey] == null || mid > lastIdByKey[redKey]) lastIdByKey[redKey] = mid;
@@ -690,7 +712,7 @@ function computePlayoffFinish(matches, isPlayed) {
       if (!groupColorByKey[blueKey] || mid > groupColorByKey[blueKey].id) groupColorByKey[blueKey] = { color: 'Blue', id: mid };
       if (latestId == null || mid > latestId) {
         latestId = mid;
-        championKey = rs > bs ? redKey : (bs > rs ? blueKey : null);
+        championKey = winSide === 'red' ? redKey : (winSide === 'blue' ? blueKey : null);
       }
     }
   });
@@ -860,11 +882,16 @@ function buildBracketData(matches) {
     const redLossesBefore = allianceLosses[redKey] || 0;
     const blueLossesBefore = allianceLosses[blueKey] || 0;
     if (redLossesBefore >= 2 || blueLossesBefore >= 2) nonStandardFormat = true;
-    let winnerSide = null;
-    if (rs > bs) { winnerSide = 'red'; allianceLosses[blueKey] = blueLossesBefore + 1; }
-    else if (bs > rs) { winnerSide = 'blue'; allianceLosses[redKey] = redLossesBefore + 1; }
+    const redDq = m.teams.some(t => t.alliance === 'Red' && t.dq);
+    const blueDq = m.teams.some(t => t.alliance === 'Blue' && t.dq);
+    let winnerSide = playoffWinnerSide(m, rs, bs);
+    if (winnerSide === 'red') allianceLosses[blueKey] = blueLossesBefore + 1;
+    else if (winnerSide === 'blue') allianceLosses[redKey] = redLossesBefore + 1;
     const bracketGroup = (redLossesBefore === 0 && blueLossesBefore === 0) ? 'winners' : 'elimination';
-    games.push({ label: m.matchNumber || m.id, id: m.id, redKey, blueKey, redScore: rs, blueScore: bs, winnerSide, bracketGroup });
+    // redDq/blueDq ride along on each game so the bracket page can strike through a DQ'd alliance's
+    // teams while still showing the real recorded score (not zeroed) — same treatment ftcscout's own
+    // site uses, per direct comparison against a real DQ'd match.
+    games.push({ label: m.matchNumber || m.id, id: m.id, redKey, blueKey, redScore: rs, blueScore: bs, winnerSide, bracketGroup, redDq, blueDq });
   });
 
   if (nonStandardFormat) {
@@ -970,7 +997,10 @@ function renderFallbackBracketHtml(data, teamNameByNumber, eventLabel, highlight
     }
     return null;
   };
-  const allianceLabel = key => {
+  // dq strikes through the team names (ftcscout's own treatment for a disqualified alliance, per
+  // direct comparison against a real DQ'd match) — the "A#:" seed prefix stays un-struck since that's
+  // bracket metadata, not part of "the teams."
+  const allianceLabel = (key, dq = false) => {
     const teamsHtml = (data.allianceTeams[key] || key.split(',').map(Number))
       .map(t => {
         const name = teamNameByNumber[t];
@@ -981,7 +1011,7 @@ function renderFallbackBracketHtml(data, teamNameByNumber, eventLabel, highlight
       })
       .join(' &amp; ');
     const seed = seedForAllianceKey(key);
-    return (seed != null ? `<span class="allianceSeed">A${seed}:</span>` : '') + teamsHtml;
+    return (seed != null ? `<span class="allianceSeed">A${seed}:</span>` : '') + (dq ? `<s>${teamsHtml}</s>` : teamsHtml);
   };
   // Full, untruncated alliance/team info for the native title tooltip on hover — the on-card label above
   // truncates long team names to keep boxes compact, but the tooltip always spells everything out.
@@ -992,12 +1022,14 @@ function renderFallbackBracketHtml(data, teamNameByNumber, eventLabel, highlight
       .join(' & ');
     return (seed != null ? `Alliance ${seed}: ` : '') + teamsText;
   };
+  // A DQ'd side still shows its real recorded score (not zeroed — matches ftcscout's own treatment),
+  // just with a small "DQ" tag so it's clear that score didn't actually decide the match.
   const matchCard = g => `
     <div class="matchCard">
       <div class="matchLabel">Match ${escapeHtml(g.label)}</div>
-      <div class="side red ${g.winnerSide === 'red' ? 'winner' : ''}" title="${escapeHtml(allianceTooltip(g.redKey))}"><span class="teams">${allianceLabel(g.redKey)}</span><span class="score">${g.redScore}</span></div>
+      <div class="side red ${g.winnerSide === 'red' ? 'winner' : ''}" title="${escapeHtml(allianceTooltip(g.redKey))}"><span class="teams">${allianceLabel(g.redKey, g.redDq)}</span><span class="score">${g.redScore}${g.redDq ? ' <span class="dqTag" title="Red alliance disqualified">DQ</span>' : ''}</span></div>
       <div class="vs">vs</div>
-      <div class="side blue ${g.winnerSide === 'blue' ? 'winner' : ''}" title="${escapeHtml(allianceTooltip(g.blueKey))}"><span class="teams">${allianceLabel(g.blueKey)}</span><span class="score">${g.blueScore}</span></div>
+      <div class="side blue ${g.winnerSide === 'blue' ? 'winner' : ''}" title="${escapeHtml(allianceTooltip(g.blueKey))}"><span class="teams">${allianceLabel(g.blueKey, g.blueDq)}</span><span class="score">${g.blueScore}${g.blueDq ? ' <span class="dqTag" title="Blue alliance disqualified">DQ</span>' : ''}</span></div>
     </div>`;
   return `<!DOCTYPE html>
 <html>
@@ -1034,6 +1066,7 @@ function renderFallbackBracketHtml(data, teamNameByNumber, eventLabel, highlight
   .teams { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .score { font-size: 14px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
   .allianceSeed { color: var(--muted); font-weight: 700; margin-right: 3px; }
+  .dqTag { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .03em; color: #fff; background: #c0392b; border-radius: 3px; padding: 1px 4px; vertical-align: middle; }
   .returnBtn { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px; padding: 6px 12px; font-size: 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--returnbtn-bg); color: var(--text); cursor: pointer; }
   .returnBtn:hover { background: var(--returnbtn-hover); }
   /* Touch-only substitute for the native title="..." tooltip (see isTouchDevice below) — reuses --text/
@@ -1099,8 +1132,11 @@ function renderBracketHtml(data, teamNameByNumber, eventLabel, highlightColorByT
     return null;
   };
   // truncate defaults to true (used for the compact bracket cards); the Winner box at the top has
-  // plenty of room, so it calls this with truncate=false to show full team names there.
-  const allianceLabel = (key, truncate = true) => {
+  // plenty of room, so it calls this with truncate=false to show full team names there. dq strikes
+  // through the team names (ftcscout's own treatment for a disqualified alliance, per direct
+  // comparison against a real DQ'd match) — the "A#:" seed prefix stays un-struck since that's
+  // bracket metadata, not part of "the teams."
+  const allianceLabel = (key, truncate = true, dq = false) => {
     const teamsHtml = (data.allianceTeams[key] || key.split(',').map(Number))
       .map(t => {
         const name = teamNameByNumber[t];
@@ -1111,7 +1147,7 @@ function renderBracketHtml(data, teamNameByNumber, eventLabel, highlightColorByT
       })
       .join(' &amp; ');
     const seed = seedForAllianceKey(key);
-    return (seed != null ? `<span class="allianceSeed">A${seed}:</span>` : '') + teamsHtml;
+    return (seed != null ? `<span class="allianceSeed">A${seed}:</span>` : '') + (dq ? `<s>${teamsHtml}</s>` : teamsHtml);
   };
   // Full, untruncated alliance/team info for the native title tooltip on hover — the compact bracket
   // cards truncate long team names to keep boxes a reasonable width, but the tooltip always spells
@@ -1123,18 +1159,26 @@ function renderBracketHtml(data, teamNameByNumber, eventLabel, highlightColorByT
       .join(' & ');
     return (seed != null ? `Alliance ${seed}: ` : '') + teamsText;
   };
-  const gameLine = g => `<div class="gameLine"><span class="gameLabel">#${escapeHtml(g.label)}</span><span class="${g.winnerSide === 'red' ? 'gwin' : ''}">${g.redScore}</span>&ndash;<span class="${g.winnerSide === 'blue' ? 'gwin' : ''}">${g.blueScore}</span></div>`;
+  // A DQ'd side still shows its real recorded score (not zeroed — matches ftcscout's own treatment),
+  // just with a small "DQ" tag so it's clear that score didn't actually decide the game.
+  const gameLine = g => `<div class="gameLine"><span class="gameLabel">#${escapeHtml(g.label)}</span><span class="${g.winnerSide === 'red' ? 'gwin' : ''}">${g.redScore}${g.redDq ? ' <span class="dqTag" title="Red alliance disqualified">DQ</span>' : ''}</span>&ndash;<span class="${g.winnerSide === 'blue' ? 'gwin' : ''}">${g.blueScore}${g.blueDq ? ' <span class="dqTag" title="Blue alliance disqualified">DQ</span>' : ''}</span></div>`;
   // data-key on each .side identifies which real alliance (buildBracketData's own key — the same one
   // used for connector-line routing above) that box belongs to, so the click-to-highlight script below
   // can find every box a given alliance appears in across the whole bracket without needing seed numbers
   // or any other lookup — this works even when no official seed was derivable for this event.
-  const nodeCard = (n, extraClass) => `
+  const nodeCard = (n, extraClass) => {
+    // A series is almost always a single game, but check every game in it — the DQ strikethrough on
+    // the team label reflects "was this alliance DQ'd in any game of this series," not just the last one.
+    const redDq = n.games.some(g => g.redDq);
+    const blueDq = n.games.some(g => g.blueDq);
+    return `
     <div class="node ${n.bracketGroup} ${extraClass || ''}" id="node-${n.id}">
       ${n.games.length > 1 ? `<div class="seriesTag">Series &mdash; ${n.games.length} games</div>` : ''}
-      <div class="side red ${n.seriesWinnerSide === 'red' ? 'winner' : ''}" data-key="${escapeHtml(n.redKey)}" title="${escapeHtml(allianceTooltip(n.redKey))}"><span class="teams">${allianceLabel(n.redKey)}</span></div>
-      <div class="side blue ${n.seriesWinnerSide === 'blue' ? 'winner' : ''}" data-key="${escapeHtml(n.blueKey)}" title="${escapeHtml(allianceTooltip(n.blueKey))}"><span class="teams">${allianceLabel(n.blueKey)}</span></div>
+      <div class="side red ${n.seriesWinnerSide === 'red' ? 'winner' : ''}" data-key="${escapeHtml(n.redKey)}" title="${escapeHtml(allianceTooltip(n.redKey))}"><span class="teams">${allianceLabel(n.redKey, true, redDq)}</span></div>
+      <div class="side blue ${n.seriesWinnerSide === 'blue' ? 'winner' : ''}" data-key="${escapeHtml(n.blueKey)}" title="${escapeHtml(allianceTooltip(n.blueKey))}"><span class="teams">${allianceLabel(n.blueKey, true, blueDq)}</span></div>
       <div class="games">${n.games.map(gameLine).join('')}</div>
     </div>`;
+  };
   // The Winner box gets the same data-key as its matching .side boxes, so it's picked up by the exact
   // same click-to-highlight-a-run selector below with no special-case code — clicking it selects the
   // champion alliance just like clicking any of its boxes elsewhere in the bracket would.
@@ -1237,6 +1281,7 @@ function renderBracketHtml(data, teamNameByNumber, eventLabel, highlightColorByT
   .node.winners { background: var(--card-bg); }
   .node.elimination { background: var(--elim-bg); }
   .allianceSeed { color: var(--muted); font-weight: 700; margin-right: 3px; }
+  .dqTag { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .03em; color: #fff; background: #c0392b; border-radius: 3px; padding: 1px 4px; vertical-align: middle; }
   .returnBtn { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px; padding: 6px 12px; font-size: 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--returnbtn-bg); color: var(--text); cursor: pointer; }
   .returnBtn:hover { background: var(--returnbtn-hover); }
   /* Touch-only substitute for the native title="..." tooltip (see isTouchDevice below) — reuses --text/
@@ -2375,13 +2420,14 @@ document.getElementById('runBtn').addEventListener('click', async () => {
         const blueKey = allianceKey(m.teams.filter(t => t.alliance === 'Blue').map(t => t.teamNumber));
         allianceWins[redKey] = allianceWins[redKey] || 0;
         allianceWins[blueKey] = allianceWins[blueKey] || 0;
-        if (rs > bs) allianceWins[redKey]++; else if (bs > rs) allianceWins[blueKey]++;
+        const winSide = playoffWinnerSide(m, rs, bs);
+        if (winSide === 'red') allianceWins[redKey]++; else if (winSide === 'blue') allianceWins[blueKey]++;
         const mid = m.id;
         if (!groupColorByKey[redKey] || (mid != null && mid > groupColorByKey[redKey].id)) groupColorByKey[redKey] = { color: 'Red', id: mid };
         if (!groupColorByKey[blueKey] || (mid != null && mid > groupColorByKey[blueKey].id)) groupColorByKey[blueKey] = { color: 'Blue', id: mid };
         if (mid != null && (latestId == null || mid > latestId)) {
           latestId = mid;
-          championKey = rs > bs ? redKey : (bs > rs ? blueKey : null);
+          championKey = winSide === 'red' ? redKey : (winSide === 'blue' ? blueKey : null);
         }
       });
 
@@ -2563,9 +2609,12 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     } else {
       log(`Could not calibrate the RP win-value against ftcscout's data for this event (no usable comparison teams yet) — assuming ${winRpValue} point(s) per qual win.`);
     }
-    // Playoff matches, and matches that haven't been played yet, don't have an rp value.
-    function rpFor(level, played, scoreObj, ownScore, oppScore) {
+    // Playoff matches, and matches that haven't been played yet, don't have an rp value. dq is optional
+    // (only the per-team match-log rows pass it) — per T501, a disqualified team's own RP for that
+    // qual match is forced to 0, overriding whatever the real score would've earned them.
+    function rpFor(level, played, scoreObj, ownScore, oppScore, dq) {
       if (!played || level !== 'Quals' || ownScore === null || oppScore === null) return null;
+      if (dq) return 0;
       const winRp = ownScore > oppScore ? winRpValue : (ownScore < oppScore ? 0 : 1);
       return winRp + bonusRpFor(scoreObj);
     }
@@ -2586,14 +2635,30 @@ document.getElementById('runBtn').addEventListener('click', async () => {
       const redScore = played && m.scores && m.scores.red && typeof m.scores.red.totalPoints === 'number' ? m.scores.red.totalPoints : null;
       const blueScore = played && m.scores && m.scores.blue && typeof m.scores.blue.totalPoints === 'number' ? m.scores.blue.totalPoints : null;
       const matchLabel = m.matchNumber || m.id;
-      const addEntries = (entries, ownTeams, oppTeams, ownScore, oppScore, scoreObj) => {
+      const isQuals = m.tournamentLevel === 'Quals';
+      // DQ handling differs by level (see the two rule comments below): quals only ever needs each
+      // entry's own e.dq, but a playoff DQ takes the whole ALLIANCE down, so each side also needs to
+      // know whether ANY of its own teams — or the opposing alliance's — were disqualified.
+      const redDqAny = redAll.some(t => t.dq);
+      const blueDqAny = blueAll.some(t => t.dq);
+      const addEntries = (entries, ownTeams, oppTeams, ownScore, oppScore, scoreObj, ownAllianceDq, oppAllianceDq) => {
         entries.forEach(e => {
           const t = e.teamNumber;
           if (!teamMatches[t]) return;
           const partners = ownTeams.filter(x => x !== t);
           let result = '—';
           if (played && ownScore !== null && oppScore !== null) {
-            result = ownScore > oppScore ? 'W' : (ownScore < oppScore ? 'L' : 'T');
+            if (isQuals) {
+              // T501: a DQ in a qualification MATCH applies only to the disqualified team itself — no
+              // effect on their ALLIANCE partner, who's still credited off the real score as normal.
+              result = e.dq ? 'L' : (ownScore > oppScore ? 'W' : (ownScore < oppScore ? 'L' : 'T'));
+            } else {
+              // Playoff DQ takes down the whole ALLIANCE (T605): the DQ'd ALLIANCE loses regardless of
+              // score; if both are DQ'd this falls back to a tie, the same simplification used in
+              // playoffWinnerSide (the official rule's chronological tiebreak isn't in the data).
+              result = (ownAllianceDq && oppAllianceDq) ? 'T' : ownAllianceDq ? 'L' : oppAllianceDq ? 'W'
+                : (ownScore > oppScore ? 'W' : (ownScore < oppScore ? 'L' : 'T'));
+            }
           }
           teamMatches[t].push({
             match: matchLabel,
@@ -2610,13 +2675,14 @@ document.getElementById('runBtn').addEventListener('click', async () => {
             // false only for an alliance's backup (a 3-person alliance's non-starter); always true for
             // a traditional 2-team alliance, since ownTeams already contains every entry there.
             onField: ownTeams.includes(t),
-            rp: rpFor(m.tournamentLevel, played, scoreObj || {}, ownScore, oppScore),
-            surrogate: !!e.surrogate
+            rp: rpFor(m.tournamentLevel, played, scoreObj || {}, ownScore, oppScore, e.dq),
+            surrogate: !!e.surrogate,
+            dq: !!e.dq
           });
         });
       };
-      addEntries(redAll, redTeams, blueTeams, redScore, blueScore, m.scores && m.scores.red);
-      addEntries(blueAll, blueTeams, redTeams, blueScore, redScore, m.scores && m.scores.blue);
+      addEntries(redAll, redTeams, blueTeams, redScore, blueScore, m.scores && m.scores.red, redDqAny, blueDqAny);
+      addEntries(blueAll, blueTeams, redTeams, blueScore, redScore, m.scores && m.scores.blue, blueDqAny, redDqAny);
     }
     teamIds.forEach(t => teamMatches[t].sort((a, b) => (typeof a.match === 'number' && typeof b.match === 'number') ? a.match - b.match : String(a.match).localeCompare(String(b.match))));
 
@@ -2716,18 +2782,24 @@ document.getElementById('runBtn').addEventListener('click', async () => {
       const redWin = rs > bs, blueWin = bs > rs;
       const redRp = rpFor('Quals', true, m.scores.red, rs, bs) || 0;
       const blueRp = rpFor('Quals', true, m.scores.blue, bs, rs) || 0;
+      // T501: in a qualification MATCH, a DQ applies only to the disqualified team itself — it
+      // "contributes 0 to all sort criteria" for that team (forced loss, 0 RP here), but has no effect
+      // on their ALLIANCE partner, who's still credited normally off the real score below. This is the
+      // opposite of a playoff DQ, which takes the whole ALLIANCE down — see playoffWinnerSide.
       for (const e of redEntries) {
         if (excludeSurrogate && e.surrogate) continue;
         const t = e.teamNumber;
-        if (redWin) actW[t]++; else if (blueWin) actL[t]++; else actT[t]++;
-        rpSum[t] += redRp;
+        if (e.dq) { actL[t]++; }
+        else if (redWin) actW[t]++; else if (blueWin) actL[t]++; else actT[t]++;
+        rpSum[t] += e.dq ? 0 : redRp;
         allianceScoreSum[t] += rs;
       }
       for (const e of blueEntries) {
         if (excludeSurrogate && e.surrogate) continue;
         const t = e.teamNumber;
-        if (blueWin) actW[t]++; else if (redWin) actL[t]++; else actT[t]++;
-        rpSum[t] += blueRp;
+        if (e.dq) { actL[t]++; }
+        else if (blueWin) actW[t]++; else if (redWin) actL[t]++; else actT[t]++;
+        rpSum[t] += e.dq ? 0 : blueRp;
         allianceScoreSum[t] += bs;
       }
     }
@@ -2739,7 +2811,11 @@ document.getElementById('runBtn').addEventListener('click', async () => {
         if (!effectivePlayed(m) || !m.scores || !m.scores.red || !m.scores.blue) continue;
         const rs = m.scores.red.totalPoints, bs = m.scores.blue.totalPoints;
         if (typeof rs !== 'number' || typeof bs !== 'number') continue;
-        const redWin = rs > bs, blueWin = bs > rs;
+        // finalsOnlyEvent's matches are real playoff-level head-to-head finals (there's no separate
+        // Quals round at all), so a DQ here takes down the whole ALLIANCE — playoffWinnerSide, not the
+        // per-team quals rule used in the loop above.
+        const winSide = playoffWinnerSide(m, rs, bs);
+        const redWin = winSide === 'red', blueWin = winSide === 'blue';
         // Only the 2 who actually took the field earn a credited result; a backup's own row still
         // shows this match in their log (see teamMatches above), just without an actual-record credit.
         const redStarters = new Set(likelyStarters(m.teams.filter(t => t.alliance === 'Red')).map(t => t.teamNumber));
