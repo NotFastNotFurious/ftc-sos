@@ -1960,20 +1960,23 @@ document.getElementById('bracketBtn').addEventListener('click', () => {
   // open into a jarring light-mode page when the rest of the tool is dark (or vice versa).
   const isDarkMode = document.body.classList.contains('dark');
   const html = renderBracketHtml(data, teamNameByNumber, eventLabel, highlightColorByTeam, lastOfficialSeedByIndex, lastPlayoffFinishByTeam, isDarkMode);
-  const w = window.open('', '_blank');
+  // Hand the rendered HTML to bracket.html via localStorage and navigate straight to that real,
+  // same-origin file — rather than opening a blank tab and pointing it at a blob: URL. Two reasons:
+  //   1. Favicon: a plain document.write() into an about:blank tab never picks up its <link
+  //      rel="icon">, since favicon fetching is tied to a real navigation. A blob: URL navigation
+  //      fixed that, but so does this, since bracket.html is itself a real page load.
+  //   2. Installed-PWA windowing: window.open() only stays "inside" the installed app (instead of
+  //      kicking out to the regular browser) when the target is same-origin and within the
+  //      manifest's scope. A blob: URL's opaque origin never qualifies for that; a same-origin
+  //      bracket.html always does.
+  try {
+    localStorage.setItem('sosToolBracketHtml', html);
+  } catch (e) {
+    log('Could not prepare the bracket page (local storage may be full or disabled): ' + e.message);
+    return;
+  }
+  const w = window.open('bracket.html', '_blank');
   if (!w) { log('Could not open a new tab for the bracket — check your browser\'s popup blocker.'); return; }
-  // A plain document.write() into this still-about:blank tab renders the bracket fine, but Chrome
-  // won't pick up its <link rel="icon"> favicon that way — favicon fetching is tied to a real
-  // navigation, and a tab that's never actually navigated (just written into) doesn't get one.
-  // A data: URL navigation would be a real page load too, but ad blockers (AdBlock Plus, etc.)
-  // commonly flag top-level navigation to a data: URI as a malvertising pattern and silently block
-  // it. A blob: URL is a real navigation as well — so the favicon still gets picked up — without
-  // matching that filter, since it's the same ordinary mechanism sites use for "download this file"
-  // links and isn't treated as suspicious.
-  // (window.opener back on the main page still works fine across this — it's set at window.open()
-  // time and isn't affected by what the popup navigates to afterward.)
-  const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-  w.location.href = blobUrl;
 });
 
 // EXPERIMENTAL (v20 branch): turns the Event code input into a combined search box, since requiring

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bracket</title>
+</head>
+<body>
+<script>
+  // The SOS Tool (beta.html / index.html) writes the fully-rendered bracket page HTML into
+  // localStorage right before opening this tab, then this shell just replaces itself with that
+  // content — see the bracketBtn click handler.
+  //
+  // This exists as a real same-origin file (instead of the old blob: URL approach) specifically
+  // so the installed PWA opens it as another window WITHIN the app instead of kicking out to the
+  // regular browser: window.open() only stays "in app" when the target is same-origin and within
+  // the manifest's scope, and a blob: URL's opaque origin never qualifies for that.
+  const html = localStorage.getItem('sosToolBracketHtml');
+  if (html) {
+    document.open();
+    document.write(html);
+    document.close();
+  } else {
+    document.body.style.cssText = 'font-family: system-ui, sans-serif; padding: 40px; text-align: center; color: #666;';
+    document.body.textContent = 'No bracket data found — please reopen the bracket from the SOS Tool.';
+  }
+</script>
+</body>
+</html>
