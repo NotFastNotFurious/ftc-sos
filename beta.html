@@ -3117,9 +3117,15 @@ if (autoRunOnLoad) document.getElementById('runBtn').click();
   // Registers the PWA service worker (see sw-beta.js) so the tool is installable
   // (Add to Home Screen / desktop install). Guarded so it's a no-op on browsers
   // without support and never throws if opened from a local file:// path.
+  //
+  // Explicit scope of just this one file (rather than the default, which would be
+  // the whole repo root) keeps this from colliding with index.html's own service
+  // worker — both live at repo root, and two service workers can't both control
+  // the same scope. Scoping each to its own page keeps beta and production fully
+  // independent even though they share a domain.
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw-beta.js').catch((err) => {
+      navigator.serviceWorker.register('sw-beta.js', { scope: './beta.html' }).catch((err) => {
         console.warn('SOS Tool: service worker registration failed', err);
       });
     });

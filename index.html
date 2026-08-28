@@ -3,6 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <title>SOS Tool</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#4B9CD3">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="SOS Tool">
 <link rel="icon" type="image/png" href="data:image/png;base64,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">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <!-- GoatCounter: privacy-friendly, cookieless analytics (page views, unique visitors, country).
@@ -1954,20 +1960,23 @@ document.getElementById('bracketBtn').addEventListener('click', () => {
   // open into a jarring light-mode page when the rest of the tool is dark (or vice versa).
   const isDarkMode = document.body.classList.contains('dark');
   const html = renderBracketHtml(data, teamNameByNumber, eventLabel, highlightColorByTeam, lastOfficialSeedByIndex, lastPlayoffFinishByTeam, isDarkMode);
-  const w = window.open('', '_blank');
+  // Hand the rendered HTML to bracket.html via localStorage and navigate straight to that real,
+  // same-origin file — rather than opening a blank tab and pointing it at a blob: URL. Two reasons:
+  //   1. Favicon: a plain document.write() into an about:blank tab never picks up its <link
+  //      rel="icon">, since favicon fetching is tied to a real navigation. A blob: URL navigation
+  //      fixed that, but so does this, since bracket.html is itself a real page load.
+  //   2. Installed-PWA windowing: window.open() only stays "inside" the installed app (instead of
+  //      kicking out to the regular browser) when the target is same-origin and within the
+  //      manifest's scope. A blob: URL's opaque origin never qualifies for that; a same-origin
+  //      bracket.html always does.
+  try {
+    localStorage.setItem('sosToolBracketHtml', html);
+  } catch (e) {
+    log('Could not prepare the bracket page (local storage may be full or disabled): ' + e.message);
+    return;
+  }
+  const w = window.open('bracket.html', '_blank');
   if (!w) { log('Could not open a new tab for the bracket — check your browser\'s popup blocker.'); return; }
-  // A plain document.write() into this still-about:blank tab renders the bracket fine, but Chrome
-  // won't pick up its <link rel="icon"> favicon that way — favicon fetching is tied to a real
-  // navigation, and a tab that's never actually navigated (just written into) doesn't get one.
-  // A data: URL navigation would be a real page load too, but ad blockers (AdBlock Plus, etc.)
-  // commonly flag top-level navigation to a data: URI as a malvertising pattern and silently block
-  // it. A blob: URL is a real navigation as well — so the favicon still gets picked up — without
-  // matching that filter, since it's the same ordinary mechanism sites use for "download this file"
-  // links and isn't treated as suspicious.
-  // (window.opener back on the main page still works fine across this — it's set at window.open()
-  // time and isn't affected by what the popup navigates to afterward.)
-  const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-  w.location.href = blobUrl;
 });
 
 // EXPERIMENTAL (v20 branch): turns the Event code input into a combined search box, since requiring
@@ -3102,6 +3111,25 @@ document.getElementById('runBtn').addEventListener('click', async () => {
 // always builds its reload URL with both fields included, so this also covers "fetch when Apply is
 // pushed" — no separate handling needed there.
 if (autoRunOnLoad) document.getElementById('runBtn').click();
+</script>
+
+<script>
+  // Registers the PWA service worker (see sw.js) so the tool is installable
+  // (Add to Home Screen / desktop install). Guarded so it's a no-op on browsers
+  // without support and never throws if opened from a local file:// path.
+  //
+  // Explicit scope of just this one file (rather than the default, which would be
+  // the whole repo root) keeps this from colliding with index.html's own service
+  // worker — both live at repo root, and two service workers can't both control
+  // the same scope. Scoping each to its own page keeps beta and production fully
+  // independent even though they share a domain.
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js', { scope: './index.html' }).catch((err) => {
+        console.warn('SOS Tool: service worker registration failed', err);
+      });
+    });
+  }
 </script>
 
 </body>
