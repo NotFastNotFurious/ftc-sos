@@ -1,9 +1,9 @@
 {
-  "id": "./index.html",
-  "name": "SOS Tool",
-  "short_name": "SOS Tool",
+  "id": "./beta.html",
+  "name": "SOS Tool (Beta)",
+  "short_name": "SOS Tool β",
   "description": "FTC OPR / Strength-of-Schedule calculator",
-  "start_url": "./index.html",
+  "start_url": "./beta.html",
   "scope": "./",
   "display": "standalone",
   "background_color": "#ffffff",
