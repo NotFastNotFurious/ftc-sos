@@ -2022,7 +2022,16 @@ async function fetchEventNames(season, codes) {
 }
 
 async function searchTeamEvents(season, teamNumber) {
-  const events = await fetchJson(`https://api.ftcscout.org/rest/v1/teams/${teamNumber}/events/${season}`);
+  let events;
+  try {
+    events = await fetchJson(`https://api.ftcscout.org/rest/v1/teams/${teamNumber}/events/${season}`);
+  } catch (e) {
+    // Treat a failed lookup the same as "no events found" rather than surfacing the raw HTTP error —
+    // e.g. ftcscout returns a 400 here for a season it doesn't have data for yet, which shouldn't look
+    // like a broken search. The name-search path (GraphQL) never hits this: it returns 200 with an
+    // empty result instead of erroring, so this keeps both paths' failure UX consistent.
+    return [];
+  }
   const codes = events.map(e => e.eventCode);
   const names = await fetchEventNames(season, codes);
   return events.map(e => ({ season, code: e.eventCode, name: names[e.eventCode] || e.eventCode }));
