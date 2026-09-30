@@ -532,6 +532,23 @@ function favTeamSpan(team, html) {
   return highlightColors.has(team) ? `<span style="color:${highlightColors.get(team)}">${html}</span>` : html;
 }
 
+// Same free-highlight treatment as ?team=/wire= above, but triggered live from the search box: picking
+// an event off a team-number search's result list (see renderRowList's teamNumber param and the
+// eventSearchPanel click handler below) means "this is the team I'm looking for" just as much as
+// landing on the page with ?team= in the URL, so it should highlight the same way. Also mirrors the
+// team into the Advanced panel's Highlight field so a later Copy Link/Apply carries it forward — that
+// field is otherwise only read at page load (see buildAdvancedUrl's comment), so editing it here has no
+// effect on the current view by itself; the highlightColors.set below is what actually highlights now.
+function addHighlight(team) {
+  if (!Number.isFinite(team) || highlightColors.has(team)) return;
+  highlightColors.set(team, defaultHighlightColor);
+  const field = document.getElementById('advHighlight');
+  const existing = field.value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!existing.some(e => parseInt(e.split(':')[0], 10) === team)) {
+    field.value = existing.concat(String(team)).join(',');
+  }
+}
+
 // What-if analysis: ?unplay=12,45 treats qualification match numbers 12 and 45 as not-yet-played,
 // regardless of their real status — same as debug's simulate-only-the-first-N-matches idea, but
 // picking specific match numbers instead of a cutoff. They stay on the schedule (still "Scheduled",
@@ -2075,8 +2092,12 @@ function renderRecentChips() {
     '</div>';
 }
 
-function renderRowList(sectionLabel, items, emptyText) {
-  const rows = items.map(it => `<div class="esp-row" data-season="${it.season}" data-code="${escapeHtml(it.code)}"><span class="esp-name">${escapeHtml(it.name)}</span><span class="esp-code">${escapeHtml(it.code)}</span></div>`).join('');
+function renderRowList(sectionLabel, items, emptyText, teamNumber) {
+  // teamNumber tags every row with data-team so picking one of a team-number search's results can
+  // auto-highlight that team (see addHighlight above and the eventSearchPanel click handler below) —
+  // omitted (and left off the row) for any other kind of row list, like the recent-chips path.
+  const teamAttr = teamNumber ? ` data-team="${teamNumber}"` : '';
+  const rows = items.map(it => `<div class="esp-row"${teamAttr} data-season="${it.season}" data-code="${escapeHtml(it.code)}"><span class="esp-name">${escapeHtml(it.name)}</span><span class="esp-code">${escapeHtml(it.code)}</span></div>`).join('');
   eventSearchPanel.innerHTML = `<div class="esp-section-label">${escapeHtml(sectionLabel)}</div>` + (rows || `<div class="esp-empty">${escapeHtml(emptyText)}</div>`);
 }
 
@@ -2112,7 +2133,7 @@ function scheduleSearch() {
       if (/^\d+$/.test(raw)) {
         const items = await searchTeamEvents(season, raw);
         if (myToken !== searchToken) return;
-        renderRowList(`Team ${raw} · ${season} events`, items, 'No events found for this team and season.');
+        renderRowList(`Team ${raw} · ${season} events`, items, 'No events found for this team and season.', raw);
       } else {
         const [direct, results] = await Promise.all([
           fetchEventByCodeDirect(season, raw.toUpperCase()),
@@ -2138,6 +2159,8 @@ eventSearchPanel.addEventListener('click', e => {
   eventCodeInput.value = row.getAttribute('data-code');
   const rowSeason = row.getAttribute('data-season');
   if (rowSeason) document.getElementById('season').value = rowSeason;
+  const rowTeam = parseInt(row.getAttribute('data-team') || '', 10);
+  if (Number.isFinite(rowTeam)) addHighlight(rowTeam);
   closeSearchPanel();
   document.getElementById('runBtn').click();
 });
