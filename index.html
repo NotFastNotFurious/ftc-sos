@@ -2131,9 +2131,14 @@ function scheduleSearch() {
   searchDebounce = setTimeout(async () => {
     try {
       if (/^\d+$/.test(raw)) {
-        const items = await searchTeamEvents(season, raw);
+        // The team name is a nicety for the section label — if its lookup fails (or the team doesn't
+        // exist) the label just falls back to the bare number rather than failing the whole search.
+        const [items, teamName] = await Promise.all([
+          searchTeamEvents(season, raw),
+          fetchJson(`https://api.ftcscout.org/rest/v1/teams/${raw}`).then(info => info.name || '').catch(() => '')
+        ]);
         if (myToken !== searchToken) return;
-        renderRowList(`Team ${raw} · ${season} events`, items, 'No events found for this team and season.', raw);
+        renderRowList(`Team ${raw}${teamName ? ' ' + teamName : ''} · ${season} events`, items, 'No events found for this team and season.', raw);
       } else {
         const [direct, results] = await Promise.all([
           fetchEventByCodeDirect(season, raw.toUpperCase()),
