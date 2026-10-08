@@ -196,17 +196,17 @@
 <body>
 
 <h1>FTC Event Strength of Schedule</h1>
-<div class="sub">Enter a season, then search by event code, event name, or team number (e.g. season 2025, USGACMP, "Georgia Championship", or team 6047). Pulls live match data from ftcscout.org and computes OPR for this event, alongside ftcscout's own published numbers, plus each team's strength of schedule. Works before matches are played too &mdash; once the schedule is posted, use Pre-event or Current OPR to forecast strength of schedule and predicted record ahead of time.</div>
+<div class="sub">Enter a season, then search by event code, event name, or team number (e.g. season 2026, USGACMP, "Georgia Championship", or team 6047). Pulls live match data from ftcscout.org to compute each team's OPR and strength of schedule. Works before matches are played too &mdash; once a schedule is posted, Pre-event or All Season OPR can forecast strength of schedule and predicted record.</div>
 
 <div class="row">
   <div>
     <label for="season">Season</label>
-    <input type="number" id="season" value="2025">
+    <input type="number" id="season" value="2026">
   </div>
   <div>
     <label for="eventCode">Event search</label>
     <div class="eventCodeWrap">
-      <input type="text" id="eventCode" placeholder="Code, name, or team #" value="USGACMP" autocomplete="off">
+      <input type="text" id="eventCode" placeholder="Code, name, or team #" value="USMISAS" autocomplete="off">
       <div id="eventSearchPanel"></div>
     </div>
   </div>
@@ -2173,6 +2173,36 @@ if (urlParams.get('team') && !urlParams.get('event') && document.getElementById(
   eventCodeInput.value = urlParams.get('team');
   scheduleSearch();
 }
+
+// A bare visit pre-fills Season/Event with the event of ftcscout's current World Record match (the
+// one their own main page features), instead of a fixed event that would go stale. The values already
+// in the HTML are the fallback whenever this lookup fails, and a bookmarked ?season=/?event=/?team=
+// link or anything the visitor typed before the reply arrives always wins. FTC seasons are named for
+// the year they start (September), and a brand-new season has no record until its first matches are
+// played — the lookup then errors, so it falls back to the previous season's record.
+(async function applyWorldRecordDefault() {
+  if (urlParams.get('season') || urlParams.get('event') || urlParams.get('team')) return;
+  const seasonEl = document.getElementById('season');
+  const startSeason = seasonEl.value, startEvent = eventCodeInput.value;
+  const now = new Date();
+  const currentSeason = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+  for (const s of [currentSeason, currentSeason - 1]) {
+    try {
+      const res = await fetch('https://api.ftcscout.org/graphql', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: 'query($s:Int!){ tradWorldRecord(season:$s){ season eventCode } }', variables: { s } })
+      });
+      const rec = ((await res.json()).data || {}).tradWorldRecord;
+      if (rec && rec.eventCode) {
+        if (seasonEl.value === startSeason && eventCodeInput.value === startEvent) {
+          seasonEl.value = rec.season;
+          eventCodeInput.value = rec.eventCode;
+        }
+        return;
+      }
+    } catch (e) { /* fall through to the previous season, then the HTML's built-in defaults */ }
+  }
+})();
 
 document.getElementById('runBtn').addEventListener('click', async () => {
   clearLog();
