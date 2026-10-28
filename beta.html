@@ -117,10 +117,24 @@
   .advRow input[type=text], .advRow input[type=number] { width: 280px; }
   .advCheckboxRow label { display: flex; align-items: center; gap: 6px; margin: 0; }
   .advActions { display: flex; align-items: center; gap: 10px; }
+  #manualBulkText { width: 100%; min-height: 90px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 13px; background: var(--input-bg); color: var(--text); resize: vertical; }
+  #manualBulkMsg { white-space: pre-wrap; }
+  #manualBulkMsg .warn { color: #b45309; }
+  body.dark #manualBulkMsg .warn { color: #f0b429; }
   #manualText { width: 100%; min-height: 160px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 13px; background: var(--input-bg); color: var(--text); resize: vertical; }
   #manualStatus { white-space: pre-wrap; }
   #manualStatus .warn { color: #b45309; }
   body.dark #manualStatus .warn { color: #f0b429; }
+  #manualScoresBox { border-top: 1px solid var(--opts2-border); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .msHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .msHead select { padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; font-size: 14px; background: var(--input-bg); color: var(--text); }
+  .msGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .msCol { border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .msCol.red { background: var(--finals-red); }
+  .msCol.blue { background: var(--finals-blue); }
+  .msCol label { font-size: 12px; display: flex; flex-direction: column; gap: 2px; margin: 0; }
+  .msCol input[type=number] { width: 100%; box-sizing: border-box; }
+  .msTeams { font-size: 13px; font-weight: 600; }
   .logPanel { margin-bottom: 20px; }
   .logPanel summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--label-text); list-style: none; padding: 2px 0 6px; }
   .logPanel summary::-webkit-details-marker { display: none; }
@@ -281,6 +295,17 @@
     <div class="advActions">
       <button type="button" id="manualRunBtn">Load and compute</button>
       <button type="button" id="manualClearBtn" class="secondary">Clear</button>
+    </div>
+    <div id="manualScoresBox" style="display:none">
+      <p class="note"><strong>Scores</strong> &mdash; enter each match as it finishes. <em>Penalty pts</em> is the points awarded to that alliance for the other alliance's fouls (already included in its score); they're left out of OPR. <em>Bonus RP</em> is optional. Pick any match from the list to correct it. "Clear" above starts a fresh event (schedule and scores).</p>
+      <div id="manualScoreCard"></div>
+      <details id="manualBulk">
+        <summary class="note">Paste several scores at once</summary>
+        <p class="note">One match per line: red <em>points penalty RP</em>, then blue, like <code>Q7 | 85 20 3 | 60 0 0</code>. Penalty and RP may be left off (they default to 0). Matches already scored are replaced.</p>
+        <textarea id="manualBulkText" spellcheck="false" placeholder="Q1 | 91 0 3 | 31 0 0&#10;Q2 | 85 20 3 | 60 0 0"></textarea>
+        <div id="manualBulkMsg" class="note"></div>
+        <div class="advActions"><button type="button" id="manualBulkBtn">Add scores</button></div>
+      </details>
     </div>
   </div>
 </details>
@@ -2244,9 +2269,10 @@ function localDateIso() {
 // numbers in red1 red2 blue1 blue2 order, "*" after a team marking a surrogate appearance. The first
 // line that isn't a match line (before any match) is the event title. Never throws — anything it can't
 // use is reported back in errors/warnings so the caller can show it.
+const MANUAL_LINE_RE = /^\s*(?:q(?:ual(?:ification)?)?\s*(\d{1,3})\b[\s|:.\-)]*|(\d{1,3})\s*[|:]\s*)(.+)$/i;
 function parseManualSchedule(text) {
   const out = { title: '', matches: [], errors: [], warnings: [], summary: '' };
-  const lineRe = /^\s*(?:q(?:ual(?:ification)?)?\s*(\d{1,3})\b[\s|:.\-)]*|(\d{1,3})\s*[|:]\s*)(.+)$/i;
+  const lineRe = MANUAL_LINE_RE;
   const byNumber = new Map();
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trim();
@@ -2294,14 +2320,184 @@ function parseManualSchedule(text) {
   return out;
 }
 
-// The same shape ftcscout's /matches returns for an unplayed qualification match.
+// Scores entered so far, by match number: rs/bs = each alliance's final score as shown on the result
+// screen (penalty points awarded to it included), rpen/bpen = the penalty points awarded to it (taken
+// back out for OPR, like ftcscout's "no penalty" total), rrp/brp = bonus ranking points.
+const MANUAL_SCORES_KEY = 'sosToolManualScores';
+let manualScores = {};
+try { manualScores = JSON.parse(localStorage.getItem(MANUAL_SCORES_KEY) || '{}') || {}; } catch (e) { manualScores = {}; }
+function saveManualScores() {
+  try { localStorage.setItem(MANUAL_SCORES_KEY, JSON.stringify(manualScores)); } catch (e) { /* storage unavailable — scores just won't survive a reload */ }
+}
+
+// Lines like "Q7 | 85 20 3 | 60 0 0": red points [penalty [RP]] | blue points [penalty [RP]]. Returns the
+// valid scores by match number plus a message for every line it couldn't use.
+function parseManualScores(text, validNumbers) {
+  const out = { scores: {}, errors: [] };
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('```')) continue;
+    const short = line.length > 50 ? line.slice(0, 47) + '…' : line;
+    const m = line.match(MANUAL_LINE_RE);
+    if (!m) { out.errors.push(`Couldn't read: "${short}"`); continue; }
+    const n = parseInt(m[1] || m[2], 10);
+    const sides = m[3].split('|').map(s => s.trim()).filter(Boolean).map(s => s.match(/^\d+(?:\s+\d+){0,2}$/) ? s.split(/\s+/).map(Number) : null);
+    if (sides.length !== 2 || sides.some(s => !s)) { out.errors.push(`Q${n}: expected "red | blue", each with points, optional penalty, optional RP`); continue; }
+    if (validNumbers && !validNumbers.has(n)) { out.errors.push(`Q${n} isn't in the schedule`); continue; }
+    const [r, b] = sides;
+    if ((r[1] || 0) > r[0] || (b[1] || 0) > b[0]) { out.errors.push(`Q${n}: penalty points can't be more than the score`); continue; }
+    out.scores[n] = { rs: r[0], bs: b[0], rpen: r[1] || 0, bpen: b[1] || 0, rrp: r[2] || 0, brp: b[2] || 0 };
+  }
+  return out;
+}
+
+// The same shape ftcscout's /matches returns for a qualification match — unplayed (no scores) until a
+// score has been entered for it.
 function manualMatchesToFtcscout(me) {
   const side = (list, alliance) => list.map(t => ({ teamNumber: t.team, alliance, surrogate: t.sur, onField: true, dq: false }));
-  return me.matches.map(m => ({
-    id: m.n, tournamentLevel: 'Quals', series: 0, hasBeenPlayed: false, scores: null,
-    teams: [...side(m.red, 'Red'), ...side(m.blue, 'Blue')]
-  }));
+  // bonusRp ends in "Rp", which is how the RP code in run() sums bonus ranking points generically.
+  const scoreObj = (own, opp) => ({ totalPoints: own.total, totalPointsNp: own.total - own.pen, penaltyPointsByOpp: own.pen, penaltyPointsCommitted: opp.pen, bonusRp: own.rp });
+  return me.matches.map(m => {
+    const s = manualScores[m.n];
+    const red = s && { total: s.rs, pen: s.rpen || 0, rp: s.rrp || 0 };
+    const blue = s && { total: s.bs, pen: s.bpen || 0, rp: s.brp || 0 };
+    return {
+      id: m.n, tournamentLevel: 'Quals', series: 0, hasBeenPlayed: !!s,
+      scores: s ? { red: scoreObj(red, blue), blue: scoreObj(blue, red) } : null,
+      teams: [...side(m.red, 'Red'), ...side(m.blue, 'Blue')]
+    };
+  });
 }
+
+// Team names, past events and season stats don't change during an event, so manual events (which
+// recompute after every score) fetch each one only once per page load instead of on every save.
+const sessionFetchCache = new Map();
+function fetchJsonCached(url) {
+  if (!sessionFetchCache.has(url)) {
+    sessionFetchCache.set(url, fetchJson(url).catch(e => { sessionFetchCache.delete(url); throw e; }));
+  }
+  return sessionFetchCache.get(url);
+}
+let preserveViewOnce = false; // set by a score save so the next run keeps the sort, Strength Calc choice and expanded rows
+
+// ---- Score entry card ----
+const manualScoreCardEl = document.getElementById('manualScoreCard');
+const manualScoresBoxEl = document.getElementById('manualScoresBox');
+let manualSelected = null; // the match number currently shown in the card (entry and correction share it)
+
+function nextUnscoredManualMatch() {
+  const m = manualEvent && manualEvent.matches.find(x => !manualScores[x.n]);
+  return m ? m.n : null;
+}
+
+function renderManualScoreUi(focusRed) {
+  if (!manualEvent) { manualScoresBoxEl.style.display = 'none'; return; }
+  manualScoresBoxEl.style.display = '';
+  const nums = manualEvent.matches.map(m => m.n);
+  if (manualSelected === null || !nums.includes(manualSelected)) {
+    const next = nextUnscoredManualMatch();
+    manualSelected = next !== null ? next : nums[nums.length - 1];
+  }
+  const m = manualEvent.matches.find(x => x.n === manualSelected);
+  const s = manualScores[m.n] || {};
+  const teams = list => escapeHtml(list.map(t => t.team + (t.sur ? '*' : '')).join(' '));
+  const input = (id, label, v, ph) => `<label>${label}<input type="number" inputmode="numeric" min="0" step="1" id="${id}" value="${v === undefined ? '' : v}"${ph ? ` placeholder="${ph}"` : ''}></label>`;
+  const scored = manualEvent.matches.filter(x => manualScores[x.n]).length;
+  manualScoreCardEl.innerHTML = `
+    <div class="msHead">
+      <label for="manualMatchSel">Match</label>
+      <select id="manualMatchSel">${manualEvent.matches.map(x => `<option value="${x.n}"${x.n === m.n ? ' selected' : ''}>Q${x.n}${manualScores[x.n] ? ` ✓ ${manualScores[x.n].rs}–${manualScores[x.n].bs}` : ''}</option>`).join('')}</select>
+      <span class="note">${scored} of ${manualEvent.matches.length} scored</span>
+    </div>
+    <div class="msGrid">
+      <div class="msCol red"><div class="msTeams">Red: ${teams(m.red)}</div>
+        ${input('msRs', 'Score', s.rs)}${input('msRpen', 'Penalty pts', s.rpen, '0')}${input('msRrp', 'Bonus RP', s.rrp, '0')}</div>
+      <div class="msCol blue"><div class="msTeams">Blue: ${teams(m.blue)}</div>
+        ${input('msBs', 'Score', s.bs)}${input('msBpen', 'Penalty pts', s.bpen, '0')}${input('msBrp', 'Bonus RP', s.brp, '0')}</div>
+    </div>
+    <div id="manualScoreMsg" class="note"></div>
+    <div class="advActions">
+      <button type="button" id="manualSaveBtn">Save &amp; next</button>
+      ${manualScores[m.n] ? '<button type="button" id="manualDelBtn" class="secondary">Clear this score</button>' : ''}
+    </div>`;
+  if (focusRed) { const el = document.getElementById('msRs'); if (el) el.focus(); }
+}
+
+function manualScoreMsg(text) {
+  const el = document.getElementById('manualScoreMsg');
+  if (el) el.innerHTML = `<span class="warn">${escapeHtml(text)}</span>`;
+}
+
+// Recomputes the whole table from the stored schedule and scores (cached team lookups make this
+// quick), keeping the page where it was and the user's sort / Strength Calc choice / expanded rows.
+async function recomputeManual() {
+  const y = window.scrollY;
+  preserveViewOnce = true;
+  eventCodeInput.value = MANUAL_EVENT_CODE;
+  try { await runPipeline(); } finally { preserveViewOnce = false; }
+  window.scrollTo(0, y);
+}
+
+async function saveManualScore() {
+  if (!manualEvent) return;
+  if (document.getElementById('runBtn').disabled) { manualScoreMsg('Still computing — try again in a moment.'); return; }
+  const num = id => { const v = document.getElementById(id).value.trim(); return v === '' ? null : Number(v); };
+  const rs = num('msRs'), bs = num('msBs');
+  const rpen = num('msRpen') ?? 0, bpen = num('msBpen') ?? 0, rrp = num('msRrp') ?? 0, brp = num('msBrp') ?? 0;
+  if (rs === null || bs === null) { manualScoreMsg("Enter both alliances' scores."); return; }
+  if ([rs, bs, rpen, bpen, rrp, brp].some(v => !Number.isInteger(v) || v < 0)) { manualScoreMsg('Use whole numbers, 0 or more.'); return; }
+  if (rpen > rs || bpen > bs) { manualScoreMsg("Penalty points can't be more than that alliance's score."); return; }
+  const n = manualSelected;
+  manualScores[n] = { rs, bs, rpen, bpen, rrp, brp };
+  saveManualScores();
+  await recomputeManual();
+  const next = nextUnscoredManualMatch();
+  manualSelected = next !== null ? next : n;
+  renderManualScoreUi(true);
+}
+
+async function clearManualScore() {
+  if (!manualEvent || document.getElementById('runBtn').disabled) return;
+  delete manualScores[manualSelected];
+  saveManualScores();
+  await recomputeManual();
+  renderManualScoreUi();
+}
+
+manualScoreCardEl.addEventListener('change', e => {
+  if (e.target.id === 'manualMatchSel') { manualSelected = Number(e.target.value); renderManualScoreUi(); }
+});
+manualScoreCardEl.addEventListener('click', e => {
+  if (e.target.id === 'manualSaveBtn') saveManualScore();
+  else if (e.target.id === 'manualDelBtn') clearManualScore();
+});
+manualScoreCardEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches('input')) { e.preventDefault(); saveManualScore(); }
+});
+
+document.getElementById('manualBulkBtn').addEventListener('click', async () => {
+  const msgEl = document.getElementById('manualBulkMsg'), bulkEl = document.getElementById('manualBulkText');
+  if (!manualEvent) { msgEl.innerHTML = '<span class="warn">Load a schedule first.</span>'; return; }
+  if (document.getElementById('runBtn').disabled) { msgEl.innerHTML = '<span class="warn">Still computing — try again in a moment.</span>'; return; }
+  const r = parseManualScores(bulkEl.value, new Set(manualEvent.matches.map(m => m.n)));
+  const nums = Object.keys(r.scores).map(Number).sort((a, b) => a - b);
+  const lines = [];
+  if (nums.length) {
+    nums.forEach(n => { manualScores[n] = r.scores[n]; });
+    saveManualScores();
+    lines.push(`Saved ${nums.length} score${nums.length === 1 ? '' : 's'}: ${nums.slice(0, 10).map(n => 'Q' + n).join(', ')}${nums.length > 10 ? ', …' : ''}`);
+  }
+  r.errors.forEach(e => lines.push(`<span class="warn">${escapeHtml(e)}</span>`));
+  if (!lines.length) lines.push('Nothing to add.');
+  msgEl.innerHTML = lines.join('<br>');
+  if (nums.length && !r.errors.length) bulkEl.value = '';
+  if (nums.length) {
+    await recomputeManual();
+    const next = nextUnscoredManualMatch();
+    if (next !== null) manualSelected = next;
+    renderManualScoreUi();
+  }
+});
 
 const manualTextEl = document.getElementById('manualText');
 const manualStatusEl = document.getElementById('manualStatus');
@@ -2315,6 +2511,7 @@ function refreshManualStatus() {
   else if (manualTextEl.value.trim()) lines.push('<span class="warn">No matches found yet — each line should look like Q1 | 30564 23509 | 27159 26507</span>');
   [...r.errors, ...r.warnings].forEach(w => lines.push(`<span class="warn">${escapeHtml(w)}</span>`));
   manualStatusEl.innerHTML = lines.join('<br>');
+  renderManualScoreUi();
   return r;
 }
 
@@ -2332,14 +2529,20 @@ document.getElementById('manualRunBtn').addEventListener('click', () => {
   document.getElementById('runBtn').click();
 });
 document.getElementById('manualClearBtn').addEventListener('click', () => {
+  if (Object.keys(manualScores).length && !confirm('Clear the schedule and all entered scores?')) return;
   manualTextEl.value = '';
+  manualScores = {};
+  saveManualScores();
+  manualSelected = null;
   refreshManualStatus();
   saveManualText();
 });
 try { manualTextEl.value = localStorage.getItem(MANUAL_TEXT_KEY) || ''; } catch (e) { /* no saved schedule available */ }
 if (manualTextEl.value) refreshManualStatus();
 
-document.getElementById('runBtn').addEventListener('click', async () => {
+async function runPipeline() {
+  const preserveView = preserveViewOnce; // a manual-event score save keeps the user's view across its recompute
+  preserveViewOnce = false;
   clearLog();
   // The log panel starts collapsed on every load, but opens up for a fetch that's actually running
   // so there's something to watch — it stays open afterward too, so the finished log (and any
@@ -2357,7 +2560,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
   lastPlayoffFinishByTeam = {};
   lastOfficialSeedByIndex = null;
   document.getElementById('forecastBanner').style.display = 'none';
-  expandedTeams = new Set();
+  if (!preserveView) expandedTeams = new Set();
   teamMatches = {};
   teamAwards = {};
   playoffRoleByTeam = {};
@@ -2370,13 +2573,17 @@ document.getElementById('runBtn').addEventListener('click', async () => {
   const excludeSurrogate = document.getElementById('excludeSurrogate').checked;
   currentEventCode = code;
   const isManual = code === MANUAL_EVENT_CODE;
+  const fetchTeamJson = isManual ? fetchJsonCached : fetchJson; // per-team lookups don't change during an event
 
   // Usage tracking: how often the button gets pressed, which season/event people look up, and
   // which Strength Calc OPR source they have selected. Fired on every click attempt (even with
-  // blank/invalid fields), since that's still useful signal about how the tool's being used.
-  trackEvent('run-clicked', 'Fetch and compute clicked');
-  if (season || code) trackEvent(`run-event-${season || 'noseason'}-${code || 'nocode'}`, `Run: ${season} ${code}`);
-  trackEvent(`strength-mode-${currentStrengthMode()}`, `Strength Calc OPR: ${currentStrengthMode()}`);
+  // blank/invalid fields), since that's still useful signal about how the tool's being used. Manual
+  // events are left out — every saved score recomputes, which would swamp these counts.
+  if (!isManual) {
+    trackEvent('run-clicked', 'Fetch and compute clicked');
+    if (season || code) trackEvent(`run-event-${season || 'noseason'}-${code || 'nocode'}`, `Run: ${season} ${code}`);
+    trackEvent(`strength-mode-${currentStrengthMode()}`, `Strength Calc OPR: ${currentStrengthMode()}`);
+  }
   const debugRaw = document.getElementById('debugMatchLimit').value.trim();
   const debugLimit = debugRaw === '' ? null : Math.max(0, parseInt(debugRaw, 10) || 0);
   // When debug mode is on, only quals matches numbered <= debugLimit count as "played" (and only if
@@ -2764,15 +2971,15 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     const teamEventHistory = {};
     await Promise.all(teamIds.map(async t => {
       try {
-        const info = await fetchJson(`https://api.ftcscout.org/rest/v1/teams/${t}`);
+        const info = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/teams/${t}`);
         names[t] = info.name || `Team ${t}`;
       } catch (e) { names[t] = `Team ${t}`; }
       try {
-        const qs = await fetchJson(`https://api.ftcscout.org/rest/v1/teams/${t}/quick-stats?season=${season}`);
+        const qs = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/teams/${t}/quick-stats?season=${season}`);
         if (qs && qs.tot && typeof qs.tot.value === 'number') oprCurrent[t] = qs.tot.value;
       } catch (e) { /* leave unset if team has no season-wide stats yet */ }
       try {
-        teamEventHistory[t] = await fetchJson(`https://api.ftcscout.org/rest/v1/teams/${t}/events/${season}`);
+        teamEventHistory[t] = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/teams/${t}/events/${season}`);
       } catch (e) { teamEventHistory[t] = []; }
     }));
 
@@ -2828,6 +3035,8 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     const winRpValue = calibratedWinRp !== null ? calibratedWinRp : 3;
     if (calibratedWinRp !== null) {
       log(`Calibrated RP formula against ftcscout's own per-team averages: ${winRpValue} point(s) per qual win, plus any *Rp bonus fields present in this season's scores.`);
+    } else if (isManual) {
+      log(`Manual event: counting ${winRpValue} RP per qual win (1 per tie), plus any bonus RP you entered.`);
     } else {
       log(`Could not calibrate the RP win-value against ftcscout's data for this event (no usable comparison teams yet) — assuming ${winRpValue} point(s) per qual win.`);
     }
@@ -2923,7 +3132,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
       const eventDivisionCode = {};
       await Promise.all([...otherCodes].map(async ec => {
         try {
-          const info = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${ec}`);
+          const info = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/events/${season}/${ec}`);
           if (info && info.start) eventStarts[ec] = info.start;
           if (info && info.divisionCode) eventDivisionCode[ec] = info.divisionCode;
         } catch (e) { /* skip events we can't resolve */ }
@@ -3110,7 +3319,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
       if (aHas !== bHas) return aHas ? -1 : 1;
       if (aHas) {
         if (avgRp[b] !== avgRp[a]) return avgRp[b] - avgRp[a];
-        if (!qualsIncomplete) {
+        if (!qualsIncomplete && !isManual) { // a manual event has no official tb1/tb2 to compare
           const tb1Diff = numOrLast(teamTb1[b]) - numOrLast(teamTb1[a]);
           if (tb1Diff !== 0) return tb1Diff;
           const tb2Diff = numOrLast(teamTb2[b]) - numOrLast(teamTb2[a]);
@@ -3230,12 +3439,17 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     // matches at all) and a normal event whose playoffs just haven't been decided yet.
     document.getElementById('resultsTable').classList.toggle('noFinish', !results.some(r => r.finishLabel));
 
-    sortState = { key: 'rank', dir: 'asc' };
-    document.getElementById('strengthPrior').checked = true;
-    document.getElementById('showFtcscoutCol').checked = false;
+    if (!preserveView) {
+      sortState = { key: 'rank', dir: 'asc' };
+      document.getElementById('strengthPrior').checked = true;
+      document.getElementById('showFtcscoutCol').checked = false;
+    }
     renderTable();
     document.getElementById('resultsTable').style.display = '';
-    document.getElementById('tableCaption').style.display = '';
+    const captionEl = document.getElementById('tableCaption');
+    if (captionEl.dataset.base === undefined) captionEl.dataset.base = captionEl.textContent;
+    captionEl.textContent = captionEl.dataset.base + (isManual ? '\nManual event: built from the schedule and scores you entered. RP is 3 per win (1 per tie) plus the bonus RP you entered, and rank uses an unofficial tiebreak (average alliance score), so it can differ from the official standings.' : '');
+    captionEl.style.display = '';
     document.getElementById('displayOpts').style.display = '';
 
     // EXPERIMENTAL (v20 branch): show the bracket button once there's at least one played, scored
@@ -3316,7 +3530,8 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     runBtn.disabled = false;
     document.getElementById('spinner').classList.remove('active');
   }
-});
+}
+document.getElementById('runBtn').addEventListener('click', runPipeline);
 
 // A link with ?season= or ?event= is clearly a deliberate bookmark of a specific event, not just a
 // bare visit — so it goes ahead and fetches automatically instead of leaving the user to click
