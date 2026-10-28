@@ -117,6 +117,10 @@
   .advRow input[type=text], .advRow input[type=number] { width: 280px; }
   .advCheckboxRow label { display: flex; align-items: center; gap: 6px; margin: 0; }
   .advActions { display: flex; align-items: center; gap: 10px; }
+  #manualText { width: 100%; min-height: 160px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 13px; background: var(--input-bg); color: var(--text); resize: vertical; }
+  #manualStatus { white-space: pre-wrap; }
+  #manualStatus .warn { color: #b45309; }
+  body.dark #manualStatus .warn { color: #f0b429; }
   .logPanel { margin-bottom: 20px; }
   .logPanel summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--label-text); list-style: none; padding: 2px 0 6px; }
   .logPanel summary::-webkit-details-marker { display: none; }
@@ -264,6 +268,19 @@
       <button type="button" id="advApplyBtn">Apply</button>
       <button type="button" id="advCopyBtn" class="secondary">Copy link</button>
       <span id="advCopyConfirm" class="note" style="display:none">Copied!</span>
+    </div>
+  </div>
+</details>
+
+<details id="manualPanel" class="advanced">
+  <summary>Manual event (paste a schedule)</summary>
+  <div class="advancedBody">
+    <p class="note">For events that aren't on ftcscout yet. Paste the qualification schedule, one match per line &mdash; red pair, then blue pair &mdash; like <code>Q1 | 30564 23509 | 27159 26507</code>. A <code>*</code> after a team number marks a surrogate. An optional first line with the event name becomes the title. Paste more pages onto the end to add matches. Saved on this device only; uses the Season above.</p>
+    <textarea id="manualText" spellcheck="false" placeholder="Douglasville League Meet #3&#10;Q1 | 25946 14750 | 31721 30564&#10;Q2 | 8875 27159 | 26507 7482&#10;Q3 | 11127 26418 | 21915 8678"></textarea>
+    <div id="manualStatus" class="note"></div>
+    <div class="advActions">
+      <button type="button" id="manualRunBtn">Load and compute</button>
+      <button type="button" id="manualClearBtn" class="secondary">Clear</button>
     </div>
   </div>
 </details>
@@ -2209,6 +2226,119 @@ if (urlParams.get('team') && !urlParams.get('event') && document.getElementById(
   }
 })();
 
+// ---- Manual event (paste a schedule) ----
+// For leagues that don't publish to ftcscout until an event is over: the schedule is pasted in as
+// text, kept in this browser's localStorage, and turned into the same match objects ftcscout would
+// return, so the normal pipeline in run() works on it unchanged. Typing the code MANUAL in the event
+// box (or pressing "Load and compute" in the panel) selects it instead of an ftcscout event.
+const MANUAL_EVENT_CODE = 'MANUAL';
+const MANUAL_TEXT_KEY = 'sosToolManualScheduleText';
+let manualEvent = null; // { title, matches: [{ n, red: [{team, sur}], blue: [{team, sur}] }] }, or null if nothing valid is loaded
+
+function localDateIso() {
+  const d = new Date(), pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// One match per line: "Q6 | 27159* 7482 | 22* 30564" (also "Qualification 6 ..." or "6: ..."), four team
+// numbers in red1 red2 blue1 blue2 order, "*" after a team marking a surrogate appearance. The first
+// line that isn't a match line (before any match) is the event title. Never throws — anything it can't
+// use is reported back in errors/warnings so the caller can show it.
+function parseManualSchedule(text) {
+  const out = { title: '', matches: [], errors: [], warnings: [], summary: '' };
+  const lineRe = /^\s*(?:q(?:ual(?:ification)?)?\s*(\d{1,3})\b[\s|:.\-)]*|(\d{1,3})\s*[|:]\s*)(.+)$/i;
+  const byNumber = new Map();
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('```')) continue;
+    const m = line.match(lineRe);
+    if (!m) {
+      if (!out.title && !byNumber.size) out.title = line.replace(/^#+\s*/, '');
+      else if (line !== out.title) out.errors.push(`Couldn't read: "${line.length > 60 ? line.slice(0, 57) + '…' : line}"`);
+      continue;
+    }
+    const n = parseInt(m[1] || m[2], 10);
+    const toks = m[3].match(/\d{1,6}\*?/g) || [];
+    if (toks.length !== 4) { out.errors.push(`Q${n}: expected 4 team numbers, found ${toks.length}`); continue; }
+    const teams = toks.map(t => ({ team: parseInt(t, 10), sur: t.endsWith('*') }));
+    if (new Set(teams.map(t => t.team)).size !== 4) { out.errors.push(`Q${n}: a team is listed twice`); continue; }
+    const key = toks.join(' ');
+    const prev = byNumber.get(n);
+    if (prev && prev.key !== key) out.warnings.push(`Q${n} appears more than once with different teams — kept the last one`);
+    byNumber.set(n, { n, key, red: teams.slice(0, 2), blue: teams.slice(2) });
+  }
+  out.matches = [...byNumber.values()].sort((a, b) => a.n - b.n);
+  if (!out.matches.length) return out;
+
+  const maxN = out.matches[out.matches.length - 1].n;
+  const missing = [];
+  for (let n = 1; n <= maxN; n++) if (!byNumber.has(n)) missing.push(n);
+  if (missing.length) out.warnings.push(`Missing matches: ${missing.slice(0, 12).map(n => 'Q' + n).join(', ')}${missing.length > 12 ? ` (+${missing.length - 12} more)` : ''}`);
+
+  // Every team should play the same number of matches (surrogate appearances are extra), so a team
+  // whose non-surrogate count differs from the usual one is most likely a misread number.
+  const played = new Map(), surrogateAppearances = { n: 0 };
+  for (const m of out.matches) for (const t of [...m.red, ...m.blue]) {
+    if (!played.has(t.team)) played.set(t.team, 0);
+    if (t.sur) surrogateAppearances.n++; else played.set(t.team, played.get(t.team) + 1);
+  }
+  const freq = new Map();
+  played.forEach(c => freq.set(c, (freq.get(c) || 0) + 1));
+  const usual = [...freq.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
+  const odd = [...played.entries()].filter(([, c]) => c !== usual).sort((a, b) => a[0] - b[0]);
+  odd.slice(0, 8).forEach(([team, c]) => out.warnings.push(`Team ${team} plays ${c} match${c === 1 ? '' : 'es'} (most teams play ${usual}) — check that number`));
+  if (odd.length > 8) out.warnings.push(`(+${odd.length - 8} more teams with unusual counts)`);
+
+  out.summary = `${out.matches.length} matches (Q${out.matches[0].n}–Q${maxN}), ${played.size} teams, most play ${usual}` +
+    (surrogateAppearances.n ? `, ${surrogateAppearances.n} surrogate appearance${surrogateAppearances.n === 1 ? '' : 's'}` : '') + '.';
+  return out;
+}
+
+// The same shape ftcscout's /matches returns for an unplayed qualification match.
+function manualMatchesToFtcscout(me) {
+  const side = (list, alliance) => list.map(t => ({ teamNumber: t.team, alliance, surrogate: t.sur, onField: true, dq: false }));
+  return me.matches.map(m => ({
+    id: m.n, tournamentLevel: 'Quals', series: 0, hasBeenPlayed: false, scores: null,
+    teams: [...side(m.red, 'Red'), ...side(m.blue, 'Blue')]
+  }));
+}
+
+const manualTextEl = document.getElementById('manualText');
+const manualStatusEl = document.getElementById('manualStatus');
+
+function refreshManualStatus() {
+  const r = parseManualSchedule(manualTextEl.value);
+  manualEvent = r.matches.length ? r : null;
+  const lines = [];
+  if (r.title) lines.push(escapeHtml(r.title));
+  if (r.summary) lines.push(escapeHtml(r.summary));
+  else if (manualTextEl.value.trim()) lines.push('<span class="warn">No matches found yet — each line should look like Q1 | 30564 23509 | 27159 26507</span>');
+  [...r.errors, ...r.warnings].forEach(w => lines.push(`<span class="warn">${escapeHtml(w)}</span>`));
+  manualStatusEl.innerHTML = lines.join('<br>');
+  return r;
+}
+
+function saveManualText() {
+  try { localStorage.setItem(MANUAL_TEXT_KEY, manualTextEl.value); } catch (e) { /* storage unavailable (private mode) — it just won't survive a reload */ }
+}
+
+manualTextEl.addEventListener('input', () => { refreshManualStatus(); saveManualText(); });
+document.getElementById('manualRunBtn').addEventListener('click', () => {
+  const r = refreshManualStatus();
+  if (!r.matches.length) return;
+  saveManualText();
+  eventCodeInput.value = MANUAL_EVENT_CODE;
+  closeSearchPanel();
+  document.getElementById('runBtn').click();
+});
+document.getElementById('manualClearBtn').addEventListener('click', () => {
+  manualTextEl.value = '';
+  refreshManualStatus();
+  saveManualText();
+});
+try { manualTextEl.value = localStorage.getItem(MANUAL_TEXT_KEY) || ''; } catch (e) { /* no saved schedule available */ }
+if (manualTextEl.value) refreshManualStatus();
+
 document.getElementById('runBtn').addEventListener('click', async () => {
   clearLog();
   // The log panel starts collapsed on every load, but opens up for a fetch that's actually running
@@ -2239,6 +2369,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
   const code = document.getElementById('eventCode').value.trim().toUpperCase();
   const excludeSurrogate = document.getElementById('excludeSurrogate').checked;
   currentEventCode = code;
+  const isManual = code === MANUAL_EVENT_CODE;
 
   // Usage tracking: how often the button gets pressed, which season/event people look up, and
   // which Strength Calc OPR source they have selected. Fired on every click attempt (even with
@@ -2291,26 +2422,39 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     document.getElementById('spinner').classList.remove('active');
     return;
   }
+  if (isManual && !manualEvent) {
+    log('No manual schedule is loaded on this device. Paste one into "Manual event (paste a schedule)" first.');
+    runBtn.disabled = false;
+    document.getElementById('spinner').classList.remove('active');
+    return;
+  }
 
   try {
-    log(`Fetching event info for ${season} ${code}...`);
     let eventInfo = null;
-    try { eventInfo = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}`); }
-    catch (e) { log('Could not fetch event info (continuing anyway): ' + e.message); }
+    if (isManual) {
+      // Today's date is what makes every earlier event this season count toward Pre-event OPR.
+      eventInfo = { name: manualEvent.title || 'Manual event', start: localDateIso(), type: null };
+    } else {
+      log(`Fetching event info for ${season} ${code}...`);
+      try { eventInfo = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}`); }
+      catch (e) { log('Could not fetch event info (continuing anyway): ' + e.message); }
+    }
     isLeagueTournamentEvent = !!(eventInfo && eventInfo.type === 'LeagueTournament');
     if (eventInfo && eventInfo.name) {
-      log(`Event: ${eventInfo.name}`);
+      log(isManual ? `Manual event: ${eventInfo.name} (from the schedule pasted on this device; ftcscout isn't consulted for matches, rosters or awards)` : `Event: ${eventInfo.name}`);
       const eventNameEl = document.getElementById('eventName');
-      eventNameEl.textContent = `${eventInfo.name} (${code}, ${season})`;
+      eventNameEl.textContent = isManual ? `${eventInfo.name} (manual schedule, ${season})` : `${eventInfo.name} (${code}, ${season})`;
       eventNameEl.style.display = 'block';
-      addRecentEvent({ season: Number(season), code, name: eventInfo.name });
-      showRelatedEvents(season, eventInfo); // fire-and-forget: a button that never appears (or shows up
-                                             // a moment later) shouldn't hold up or fail the main fetch
+      if (!isManual) {
+        addRecentEvent({ season: Number(season), code, name: eventInfo.name });
+        showRelatedEvents(season, eventInfo); // fire-and-forget: a button that never appears (or shows up
+                                               // a moment later) shouldn't hold up or fail the main fetch
+      }
     }
     const eventStart = eventInfo && eventInfo.start ? eventInfo.start : null;
 
     log('Fetching match data...');
-    const matches = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/matches`);
+    const matches = isManual ? manualMatchesToFtcscout(manualEvent) : await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/matches`);
     log(`Got ${matches.length} total matches.`);
 
     // EXPERIMENTAL (v20 branch): snapshot for the "View Playoff Bracket" button — see
@@ -2428,10 +2572,12 @@ document.getElementById('runBtn').addEventListener('click', async () => {
     const finalsRoleByTeam = {};
     const finalsAllianceByTeam = {};
     let eventTeams = [];
-    try {
-      eventTeams = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/teams`);
-    } catch (e) {
-      log('Could not fetch the event\'s team list: ' + e.message);
+    if (!isManual) {
+      try {
+        eventTeams = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/teams`);
+      } catch (e) {
+        log('Could not fetch the event\'s team list: ' + e.message);
+      }
     }
     if (teamIds.length === 0 && matches.length === 0 && eventTeams.length > 0) {
       // Nothing posted at all yet — genuinely a pre-event/no-schedule state.
@@ -2601,10 +2747,10 @@ document.getElementById('runBtn').addEventListener('click', async () => {
       }
     }
 
-    log('Fetching event awards...');
+    if (!isManual) log('Fetching event awards...');
     teamIds.forEach(t => { teamAwards[t] = []; });
     try {
-      const awardsData = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/awards`);
+      const awardsData = isManual ? [] : await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/awards`);
       awardsData.forEach(a => {
         if (!teamAwards[a.teamNumber]) teamAwards[a.teamNumber] = [];
         teamAwards[a.teamNumber].push(a);
