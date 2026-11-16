@@ -174,6 +174,16 @@
      run(). Deliberately reuses the #relatedEvents secondary-button look rather than inventing a new one. */
   #bracketBtnRow { display: none; gap: 8px; flex-wrap: wrap; margin: -4px 0 14px; }
   #forecastBanner { display: none; background: var(--banner-bg); border: 1px solid var(--banner-border); color: var(--banner-text); font-size: 13px; padding: 10px 14px; border-radius: 6px; margin: 0 0 16px; }
+  #whatIfRow { display: none; gap: 8px; flex-wrap: wrap; margin: -4px 0 14px; }
+  #whatIfBanner { display: none; background: var(--banner-bg); border: 1px solid var(--banner-border); color: var(--banner-text); font-size: 13px; padding: 10px 14px; border-radius: 6px; margin: 0 0 16px; }
+  #whatIfBanner .wiActions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+  #whatIfBanner .wiNote { margin-top: 6px; font-size: 12px; opacity: 0.85; }
+  .dlt { font-size: 11px; margin-left: 4px; white-space: nowrap; font-weight: 600; }
+  .dlt.good { color: #15803d; }
+  .dlt.bad { color: #b91c1c; }
+  .dlt.neutral { color: var(--note-text); font-weight: 400; }
+  body.dark .dlt.good { color: #4ade80; }
+  body.dark .dlt.bad { color: #f87171; }
   .teamCell { cursor: pointer; }
   .teamCell:hover { text-decoration: underline; color: var(--link-hover); }
   .teamCell a { color: inherit; text-decoration: none; }
@@ -318,6 +328,8 @@
 <h2 id="eventName"></h2>
 <div id="relatedEvents"></div>
 <div id="bracketBtnRow"><button id="bracketBtn" type="button" class="secondary">🏆 Playoff Bracket ↗</button></div>
+<div id="whatIfRow"><button id="whatIfCopyBtn" type="button" class="secondary" title="Copies this event's schedule and every score into the Manual event panel, where you can change a score and see how rankings and OPR would have moved">✎ What-if: copy to a manual event</button></div>
+<div id="whatIfBanner"></div>
 
 <div id="forecastBanner">No matches have been played at this event yet. OPR (Event) and Actual record will stay blank until matches are played &mdash; everything else, including Strength of Schedule and Predicted record, is already computed from the posted schedule using Pre-event / Current OPR.</div>
 
@@ -1746,6 +1758,28 @@ function getRowPredicted(r) {
   return { w: r.predictedWinsPrior, l: r.predictedLossesPrior, toss: r.predictedTossPrior };
 }
 
+// What-if change markers: a row's `base` is that team's result in the comparison run (the real event
+// with nothing unplayed, or the original scores of a copied event). Each helper returns '' unless the
+// value actually moved, so an untouched team looks exactly like it does outside a what-if.
+function deltaSpan(cur, base, lowerIsBetter) {
+  if (typeof cur !== 'number' || typeof base !== 'number') return '';
+  const d = Math.round((cur - base) * 100) / 100;
+  if (d === 0) return '';
+  const good = lowerIsBetter ? d < 0 : d > 0;
+  return `<span class="dlt ${good ? 'good' : 'bad'}" title="was ${base.toFixed(2)}">${d > 0 ? '+' : '−'}${Math.abs(d).toFixed(2)}</span>`;
+}
+function rankDeltaSpan(cur, base) {
+  if (typeof cur !== 'number' || typeof base !== 'number' || cur === base) return '';
+  const up = cur < base;
+  return `<span class="dlt ${up ? 'good' : 'bad'}" title="was ${base}">${up ? '▲' : '▼'}${Math.abs(base - cur)}</span>`;
+}
+function recordDeltaSpan(r) {
+  const b = r.base;
+  if (!b || (b.w === r.actualWins && b.l === r.actualLosses && b.t === r.actualTies)) return '';
+  const known = (b.w + b.l + b.t) > 0;
+  return `<span class="dlt neutral">was ${known ? `${b.w}-${b.l}${b.t ? '-' + b.t : ''}` : '—'}</span>`;
+}
+
 function renderTable() {
   const mode = currentStrengthMode();
   // Highlight whichever OPR column (Pre/Event/All) feeds Strength of Schedule/Predicted record right
@@ -1843,21 +1877,21 @@ function renderTable() {
       ? finalsRowClassFor(r.finalsAlliance, finalsAllianceCount)
       : (sortState.key === 'finishRank' ? finalsRowClassFor(r.finishAlliance, playoffFinishGroupCount) : '');
     const mainRow = `<tr class="${finalsRowClass}">
-    <td class="num rowNum">${i + 1}${(sortState.key !== 'avgRp' && sortState.key !== 'rank' && r.rank !== null) ? ` (${r.rank})` : ''}</td>
+    <td class="num rowNum">${i + 1}${(sortState.key !== 'avgRp' && sortState.key !== 'rank' && r.rank !== null) ? ` (${r.rank})` : ''}${r.base ? rankDeltaSpan(r.rank, r.base.rank) : ''}</td>
     <td class="num col-rank">${r.rank === null ? '—' : r.rank}</td>
-    <td class="num">${fmt(r.avgRp)}</td>
+    <td class="num">${fmt(r.avgRp)}${r.base ? deltaSpan(r.avgRp, r.base.avgRp) : ''}</td>
     <td class="teamCell">${favTeamSpan(r.team, `<a href="https://ftcscout.org/teams/${r.team}#${currentEventCode}" target="_blank" rel="noopener" title="Open ${r.team} on ftcscout.org"><strong>${r.team}</strong></a>`)}</td>
     <td class="teamCell" onclick="toggleExpand(${r.team})"><span class="expandArrow">${arrow}</span>${favTeamSpan(r.team, `<strong>${r.name}</strong>`)}</td>
     <td class="num">${fmt(r.oprPrior)}${r.priorFallback ? '*' : ''}</td>
-    <td class="num"${r.oprFtcscoutSource ? ` title="Borrowed from division event ${r.oprFtcscoutSource}"` : ''}>${fmt(r.oprCalc)}${r.oprFtcscoutSource ? '*' : ''}</td>
+    <td class="num"${r.oprFtcscoutSource ? ` title="Borrowed from division event ${r.oprFtcscoutSource}"` : ''}>${fmt(r.oprCalc)}${r.oprFtcscoutSource ? '*' : ''}${r.base ? deltaSpan(r.oprCalc, r.base.oprCalc) : ''}</td>
     <td class="num col-current">${fmt(r.oprCurrent)}</td>
-    <td class="num col-ccwm">${r.ccwm === null ? '—' : (r.ccwm > 0 ? '+' : '') + r.ccwm.toFixed(2)}</td>
+    <td class="num col-ccwm">${r.ccwm === null ? '—' : (r.ccwm > 0 ? '+' : '') + r.ccwm.toFixed(2)}${r.base ? deltaSpan(r.ccwm, r.base.ccwm) : ''}</td>
     <td class="num col-ftcscout"${r.oprFtcscoutSource ? ` title="Borrowed from division event ${r.oprFtcscoutSource}"` : ''}>${fmt(r.oprFtcscout)}${r.oprFtcscoutSource ? '*' : ''}</td>
     <td class="num">${fmt(st.strengthOpp)}</td>
     <td class="num">${fmt(st.strengthPartner)}</td>
     <td class="num">${st.sos === null ? '—' : (st.sos > 0 ? '+' : '') + st.sos.toFixed(2)}</td>
     <td class="num">${prKnown ? `${pr.w}-${pr.l}${pr.toss ? '-' + pr.toss : ''}` : '—'}</td>
-    <td class="num">${arKnown ? `${r.actualWins}-${r.actualLosses}${r.actualTies ? '-' + r.actualTies : ''}` : '—'}</td>
+    <td class="num">${arKnown ? `${r.actualWins}-${r.actualLosses}${r.actualTies ? '-' + r.actualTies : ''}` : '—'}${recordDeltaSpan(r)}</td>
     <td class="num teamCell col-played" onclick="toggleExpand(${r.team})"><span class="expandArrow">${arrow}</span><strong>${r.scheduled ? `${r.played}/${r.scheduled}` : '—'}</strong></td>
     <td class="col-finish">${r.finishLabel || '—'}</td>
   </tr>`;
@@ -2379,6 +2413,34 @@ function fetchJsonCached(url) {
   return sessionFetchCache.get(url);
 }
 let preserveViewOnce = false; // set by a score save so the next run keeps the sort, Strength Calc choice and expanded rows
+let pipelineBusy = false;
+let manualBaselineSnapshot = null; // team -> snapshot for a copied event's original scores; rebuilt when the schedule changes
+let lastRealEvent = null;          // the last real event that finished running, for the copy-to-manual button
+
+// A manual event copied from a real one remembers the original scores (and where they came from) so
+// the table can show how each edit moved things. Cleared along with the rest of the manual event.
+const MANUAL_BASELINE_KEY = 'sosToolManualBaseline';
+let manualBaseline = null; // { scores, title, code, season, start }
+try { manualBaseline = JSON.parse(localStorage.getItem(MANUAL_BASELINE_KEY) || 'null'); } catch (e) { manualBaseline = null; }
+function saveManualBaseline() {
+  try {
+    if (manualBaseline) localStorage.setItem(MANUAL_BASELINE_KEY, JSON.stringify(manualBaseline));
+    else localStorage.removeItem(MANUAL_BASELINE_KEY);
+  } catch (e) { /* storage unavailable — the comparison just won't survive a reload */ }
+}
+
+// Total of the bonus ranking points on one alliance's score object: every field ending in "Rp" (a boolean
+// flag or a number), which is how ftcscout names them from season to season.
+function bonusRpSum(scoreObj) {
+  let sum = 0;
+  for (const k in scoreObj) {
+    if (!k.endsWith('Rp')) continue;
+    const v = scoreObj[k];
+    if (typeof v === 'boolean') sum += v ? 1 : 0;
+    else if (typeof v === 'number') sum += v;
+  }
+  return sum;
+}
 
 // ---- Score entry card ----
 const manualScoreCardEl = document.getElementById('manualScoreCard');
@@ -2440,7 +2502,7 @@ async function recomputeManual() {
 
 async function saveManualScore() {
   if (!manualEvent) return;
-  if (document.getElementById('runBtn').disabled) { manualScoreMsg('Still computing — try again in a moment.'); return; }
+  if (document.getElementById('runBtn').disabled || pipelineBusy) { manualScoreMsg('Still computing — try again in a moment.'); return; }
   const num = id => { const v = document.getElementById(id).value.trim(); return v === '' ? null : Number(v); };
   const rs = num('msRs'), bs = num('msBs');
   const rpen = num('msRpen') ?? 0, bpen = num('msBpen') ?? 0, rrp = num('msRrp') ?? 0, brp = num('msBrp') ?? 0;
@@ -2457,7 +2519,7 @@ async function saveManualScore() {
 }
 
 async function clearManualScore() {
-  if (!manualEvent || document.getElementById('runBtn').disabled) return;
+  if (!manualEvent || document.getElementById('runBtn').disabled || pipelineBusy) return;
   delete manualScores[manualSelected];
   saveManualScores();
   await recomputeManual();
@@ -2478,7 +2540,7 @@ manualScoreCardEl.addEventListener('keydown', e => {
 document.getElementById('manualBulkBtn').addEventListener('click', async () => {
   const msgEl = document.getElementById('manualBulkMsg'), bulkEl = document.getElementById('manualBulkText');
   if (!manualEvent) { msgEl.innerHTML = '<span class="warn">Load a schedule first.</span>'; return; }
-  if (document.getElementById('runBtn').disabled) { msgEl.innerHTML = '<span class="warn">Still computing — try again in a moment.</span>'; return; }
+  if (document.getElementById('runBtn').disabled || pipelineBusy) { msgEl.innerHTML = '<span class="warn">Still computing — try again in a moment.</span>'; return; }
   const r = parseManualScores(bulkEl.value, new Set(manualEvent.matches.map(m => m.n)));
   const nums = Object.keys(r.scores).map(Number).sort((a, b) => a - b);
   const lines = [];
@@ -2499,6 +2561,86 @@ document.getElementById('manualBulkBtn').addEventListener('click', async () => {
   }
 });
 
+// ---- What-if: copy a real event into the manual panel, and show what an edit changed ----
+function renderWhatIfBanner(rows, isManual) {
+  const el = document.getElementById('whatIfBanner');
+  if (!rows) { el.style.display = 'none'; return; }
+  const moved = rows.filter(r => r.base && r.base.rank !== r.rank).length;
+  const movedText = moved ? `${moved} team${moved === 1 ? '' : 's'} change${moved === 1 ? 's' : ''} rank` : 'No team changes rank';
+  let head, actions = '';
+  if (isManual && manualBaseline) {
+    const orig = manualBaseline.scores;
+    const changed = manualEvent.matches.map(m => m.n).filter(n => JSON.stringify(orig[n] || null) !== JSON.stringify(manualScores[n] || null));
+    head = changed.length
+      ? `<strong>What-if:</strong> ${escapeHtml(manualBaseline.title)} with ${changed.length} match${changed.length === 1 ? '' : 'es'} changed (${changed.slice(0, 8).map(n => 'Q' + n).join(', ')}${changed.length > 8 ? ', …' : ''}). Green and red marks show the change from the original results. ${movedText}.`
+      : `<strong>What-if copy</strong> of ${escapeHtml(manualBaseline.title)}, scores unchanged so far. Change a match in "Manual event" and the table will show how rank, RP, OPR and records move.`;
+    if (changed.length) actions = '<button type="button" class="secondary" id="wiResetBtn">Reset to the original scores</button>';
+  } else {
+    const nums = [...excludeMatchNumbers].sort((a, b) => a - b);
+    head = `<strong>What-if:</strong> ${nums.map(n => 'Q' + n).join(', ')} treated as not yet played. Green and red marks show the change from playing every match. ${movedText}.`;
+    actions = '<button type="button" class="secondary" id="wiClearUnplayBtn">Show the real results</button>';
+  }
+  el.innerHTML = `${head}<div class="wiNote">Ranks here break ties by average alliance score (official tiebreakers can't be recomputed for a what-if), so they can differ slightly from the official standings.${isManual ? " DQs and no-shows from the original event aren't carried over." : ''}</div>${actions ? `<div class="wiActions">${actions}</div>` : ''}`;
+  el.style.display = 'block';
+}
+
+document.getElementById('whatIfBanner').addEventListener('click', async e => {
+  if (e.target.id === 'wiClearUnplayBtn') {
+    document.getElementById('advUnplay').value = '';
+    window.location.href = buildAdvancedUrl();
+  } else if (e.target.id === 'wiResetBtn' && manualBaseline && !pipelineBusy) {
+    manualScores = JSON.parse(JSON.stringify(manualBaseline.scores));
+    saveManualScores();
+    manualSelected = null;
+    renderManualScoreUi();
+    await recomputeManual();
+  }
+});
+
+// Copies the real event on screen — its quals schedule (surrogates marked) and every played score, with
+// penalty points split out and bonus RP summed — into the manual event, remembering the original scores
+// as the baseline the what-if marks are measured against.
+async function copyRealEventToManual() {
+  const ev = lastRealEvent;
+  if (!ev || pipelineBusy) return;
+  if ((manualTextEl.value.trim() || Object.keys(manualScores).length) &&
+      !confirm(`Replace your saved manual event with a what-if copy of "${ev.title}"?`)) return;
+  const side = (m, al) => m.teams.filter(t => t.alliance === al);
+  const quals = ev.matches.filter(m => m.tournamentLevel === 'Quals').sort((a, b) => (a.matchNumber ?? a.id) - (b.matchNumber ?? b.id));
+  const usable = quals.filter(m => side(m, 'Red').length === 2 && side(m, 'Blue').length === 2);
+  const lines = [], scores = {};
+  for (const m of usable) {
+    const n = m.matchNumber ?? m.id;
+    const names = al => side(m, al).map(t => t.teamNumber + (t.surrogate ? '*' : '')).join(' ');
+    lines.push(`Q${n} | ${names('Red')} | ${names('Blue')}`);
+    if (m.hasBeenPlayed && m.scores && m.scores.red && m.scores.blue) {
+      const one = s => {
+        const total = s.totalPoints, np = typeof s.totalPointsNp === 'number' ? s.totalPointsNp : total;
+        return typeof total === 'number' ? { total, pen: Math.max(0, total - np), rp: bonusRpSum(s) } : null;
+      };
+      const r = one(m.scores.red), b = one(m.scores.blue);
+      if (r && b) scores[n] = { rs: r.total, bs: b.total, rpen: r.pen, bpen: b.pen, rrp: r.rp, brp: b.rp };
+    }
+  }
+  if (!lines.length) { manualStatusEl.innerHTML = '<span class="warn">This event has no qualification matches that can be copied.</span>'; document.getElementById('manualPanel').open = true; return; }
+  manualTextEl.value = `${ev.title} (what-if copy)\n${lines.join('\n')}`;
+  manualScores = scores;
+  manualBaseline = { scores: JSON.parse(JSON.stringify(scores)), title: ev.title, code: ev.code, season: ev.season, start: ev.start };
+  manualBaselineSnapshot = null;
+  manualSelected = null;
+  document.getElementById('season').value = ev.season;
+  saveManualText();
+  saveManualScores();
+  saveManualBaseline();
+  refreshManualStatus();
+  const skipped = quals.length - usable.length;
+  if (skipped) manualStatusEl.innerHTML += `<br><span class="warn">${skipped} match${skipped === 1 ? '' : 'es'} without two teams per alliance weren't copied.</span>`;
+  document.getElementById('manualPanel').open = true;
+  await recomputeManual();
+  document.getElementById('manualPanel').scrollIntoView();
+}
+document.getElementById('whatIfCopyBtn').addEventListener('click', copyRealEventToManual);
+
 const manualTextEl = document.getElementById('manualText');
 const manualStatusEl = document.getElementById('manualStatus');
 
@@ -2511,6 +2653,7 @@ function refreshManualStatus() {
   else if (manualTextEl.value.trim()) lines.push('<span class="warn">No matches found yet — each line should look like Q1 | 30564 23509 | 27159 26507</span>');
   [...r.errors, ...r.warnings].forEach(w => lines.push(`<span class="warn">${escapeHtml(w)}</span>`));
   manualStatusEl.innerHTML = lines.join('<br>');
+  manualBaselineSnapshot = null; // the schedule may have changed, so the comparison run must be redone
   renderManualScoreUi();
   return r;
 }
@@ -2532,7 +2675,9 @@ document.getElementById('manualClearBtn').addEventListener('click', () => {
   if (Object.keys(manualScores).length && !confirm('Clear the schedule and all entered scores?')) return;
   manualTextEl.value = '';
   manualScores = {};
+  manualBaseline = null;
   saveManualScores();
+  saveManualBaseline();
   manualSelected = null;
   refreshManualStatus();
   saveManualText();
@@ -2540,9 +2685,13 @@ document.getElementById('manualClearBtn').addEventListener('click', () => {
 try { manualTextEl.value = localStorage.getItem(MANUAL_TEXT_KEY) || ''; } catch (e) { /* no saved schedule available */ }
 if (manualTextEl.value) refreshManualStatus();
 
-async function runPipeline() {
-  const preserveView = preserveViewOnce; // a manual-event score save keeps the user's view across its recompute
-  preserveViewOnce = false;
+// One full pass of the pipeline. opts (all optional): preserveView keeps the sort/Strength Calc/expanded
+// rows, cacheFetches reuses already-fetched ftcscout responses (a what-if runs the pipeline twice),
+// quiet skips usage tracking, and baseline (a team -> snapshot map) turns on what-if change markers.
+// Resolves true only if the pass ran to completion.
+async function runPipelineOnce(opts) {
+  const preserveView = !!opts.preserveView;
+  let ok = false;
   clearLog();
   // The log panel starts collapsed on every load, but opens up for a fetch that's actually running
   // so there's something to watch — it stays open afterward too, so the finished log (and any
@@ -2560,6 +2709,8 @@ async function runPipeline() {
   lastPlayoffFinishByTeam = {};
   lastOfficialSeedByIndex = null;
   document.getElementById('forecastBanner').style.display = 'none';
+  document.getElementById('whatIfRow').style.display = 'none';
+  document.getElementById('whatIfBanner').style.display = 'none';
   if (!preserveView) expandedTeams = new Set();
   teamMatches = {};
   teamAwards = {};
@@ -2573,13 +2724,16 @@ async function runPipeline() {
   const excludeSurrogate = document.getElementById('excludeSurrogate').checked;
   currentEventCode = code;
   const isManual = code === MANUAL_EVENT_CODE;
-  const fetchTeamJson = isManual ? fetchJsonCached : fetchJson; // per-team lookups don't change during an event
+  // Manual events reuse per-team lookups across recomputes, and a what-if (which runs this twice) reuses
+  // everything, so the second pass doesn't refetch the same event.
+  const fetchRun = (isManual || opts.cacheFetches) ? fetchJsonCached : fetchJson;
 
   // Usage tracking: how often the button gets pressed, which season/event people look up, and
   // which Strength Calc OPR source they have selected. Fired on every click attempt (even with
   // blank/invalid fields), since that's still useful signal about how the tool's being used. Manual
-  // events are left out — every saved score recomputes, which would swamp these counts.
-  if (!isManual) {
+  // events are left out — every saved score recomputes, which would swamp these counts — and so is the
+  // comparison pass of a what-if.
+  if (!isManual && !opts.quiet) {
     trackEvent('run-clicked', 'Fetch and compute clicked');
     if (season || code) trackEvent(`run-event-${season || 'noseason'}-${code || 'nocode'}`, `Run: ${season} ${code}`);
     trackEvent(`strength-mode-${currentStrengthMode()}`, `Strength Calc OPR: ${currentStrengthMode()}`);
@@ -2595,7 +2749,7 @@ async function runPipeline() {
   // credit anywhere: OPR/CCWM regression, RP, Actual record, and Strength of Schedule/Predicted
   // record all fall back to treating them as still-to-be-played.
   function effectivePlayed(m) {
-    if (m.tournamentLevel === 'Quals' && excludeMatchNumbers.has(m.matchNumber ?? m.id)) return false;
+    if (!isManual && m.tournamentLevel === 'Quals' && excludeMatchNumbers.has(m.matchNumber ?? m.id)) return false; // a manual event's what-if is done by editing its scores instead
     if (debugLimit === null) return !!m.hasBeenPlayed;
     if (m.tournamentLevel !== 'Quals') return false;
     const num = m.matchNumber || m.id;
@@ -2639,11 +2793,13 @@ async function runPipeline() {
   try {
     let eventInfo = null;
     if (isManual) {
-      // Today's date is what makes every earlier event this season count toward Pre-event OPR.
-      eventInfo = { name: manualEvent.title || 'Manual event', start: localDateIso(), type: null };
+      // Today's date is what makes every earlier event this season count toward Pre-event OPR. A
+      // what-if copy of a real event uses that event's own start date instead, so the event it was
+      // copied from isn't counted as an "earlier" event feeding its own Pre-event OPR.
+      eventInfo = { name: manualEvent.title || 'Manual event', start: (manualBaseline && manualBaseline.start) || localDateIso(), type: null };
     } else {
       log(`Fetching event info for ${season} ${code}...`);
-      try { eventInfo = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}`); }
+      try { eventInfo = await fetchRun(`https://api.ftcscout.org/rest/v1/events/${season}/${code}`); }
       catch (e) { log('Could not fetch event info (continuing anyway): ' + e.message); }
     }
     isLeagueTournamentEvent = !!(eventInfo && eventInfo.type === 'LeagueTournament');
@@ -2661,7 +2817,7 @@ async function runPipeline() {
     const eventStart = eventInfo && eventInfo.start ? eventInfo.start : null;
 
     log('Fetching match data...');
-    const matches = isManual ? manualMatchesToFtcscout(manualEvent) : await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/matches`);
+    const matches = isManual ? manualMatchesToFtcscout(manualEvent) : await fetchRun(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/matches`);
     log(`Got ${matches.length} total matches.`);
 
     // EXPERIMENTAL (v20 branch): snapshot for the "View Playoff Bracket" button — see
@@ -2691,7 +2847,7 @@ async function runPipeline() {
 
     // What-if analysis via ?unplay= (see effectivePlayed() above, which is where this actually
     // takes effect): report which of the named match numbers are real quals matches at this event.
-    if (excludeMatchNumbers.size) {
+    if (!isManual && excludeMatchNumbers.size) {
       const found = matches.filter(m => m.tournamentLevel === 'Quals' && excludeMatchNumbers.has(m.matchNumber ?? m.id));
       if (found.length) {
         log(`WHAT-IF (?unplay=): treating qualification match(es) #${found.map(m => m.matchNumber ?? m.id).join(', #')} as not-yet-played, for OPR, CCWM, RP, Strength of Schedule, and Predicted/Actual record.`);
@@ -2781,7 +2937,7 @@ async function runPipeline() {
     let eventTeams = [];
     if (!isManual) {
       try {
-        eventTeams = await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/teams`);
+        eventTeams = await fetchRun(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/teams`);
       } catch (e) {
         log('Could not fetch the event\'s team list: ' + e.message);
       }
@@ -2957,7 +3113,7 @@ async function runPipeline() {
     if (!isManual) log('Fetching event awards...');
     teamIds.forEach(t => { teamAwards[t] = []; });
     try {
-      const awardsData = isManual ? [] : await fetchJson(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/awards`);
+      const awardsData = isManual ? [] : await fetchRun(`https://api.ftcscout.org/rest/v1/events/${season}/${code}/awards`);
       awardsData.forEach(a => {
         if (!teamAwards[a.teamNumber]) teamAwards[a.teamNumber] = [];
         teamAwards[a.teamNumber].push(a);
@@ -2971,15 +3127,15 @@ async function runPipeline() {
     const teamEventHistory = {};
     await Promise.all(teamIds.map(async t => {
       try {
-        const info = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/teams/${t}`);
+        const info = await fetchRun(`https://api.ftcscout.org/rest/v1/teams/${t}`);
         names[t] = info.name || `Team ${t}`;
       } catch (e) { names[t] = `Team ${t}`; }
       try {
-        const qs = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/teams/${t}/quick-stats?season=${season}`);
+        const qs = await fetchRun(`https://api.ftcscout.org/rest/v1/teams/${t}/quick-stats?season=${season}`);
         if (qs && qs.tot && typeof qs.tot.value === 'number') oprCurrent[t] = qs.tot.value;
       } catch (e) { /* leave unset if team has no season-wide stats yet */ }
       try {
-        teamEventHistory[t] = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/teams/${t}/events/${season}`);
+        teamEventHistory[t] = await fetchRun(`https://api.ftcscout.org/rest/v1/teams/${t}/events/${season}`);
       } catch (e) { teamEventHistory[t] = []; }
     }));
 
@@ -2997,14 +3153,7 @@ async function runPipeline() {
     // self-calibrated below against ftcscout's own published per-team RP averages for this event, so
     // it stays correct automatically if a future season changes the value again.
     function bonusRpFor(scoreObj) {
-      let sum = 0;
-      for (const k in scoreObj) {
-        if (!k.endsWith('Rp')) continue;
-        const v = scoreObj[k];
-        if (typeof v === 'boolean') sum += v ? 1 : 0;
-        else if (typeof v === 'number') sum += v;
-      }
-      return sum;
+      return bonusRpSum(scoreObj);
     }
     // Calibrates against ALL real matches played so far (ignoring any Debug simulation), since
     // ftcscout's published stats.rp/wins reflect the event's true progress, not a simulated subset.
@@ -3132,7 +3281,7 @@ async function runPipeline() {
       const eventDivisionCode = {};
       await Promise.all([...otherCodes].map(async ec => {
         try {
-          const info = await fetchTeamJson(`https://api.ftcscout.org/rest/v1/events/${season}/${ec}`);
+          const info = await fetchRun(`https://api.ftcscout.org/rest/v1/events/${season}/${ec}`);
           if (info && info.start) eventStarts[ec] = info.start;
           if (info && info.divisionCode) eventDivisionCode[ec] = info.divisionCode;
         } catch (e) { /* skip events we can't resolve */ }
@@ -3319,7 +3468,9 @@ async function runPipeline() {
       if (aHas !== bHas) return aHas ? -1 : 1;
       if (aHas) {
         if (avgRp[b] !== avgRp[a]) return avgRp[b] - avgRp[a];
-        if (!qualsIncomplete && !isManual) { // a manual event has no official tb1/tb2 to compare
+        // A manual event has no official tb1/tb2, and a what-if comparison must break ties the same
+        // unofficial way in both runs — otherwise rank "changes" could just be the tiebreak switching.
+        if (!qualsIncomplete && !isManual && !opts.baseline && !opts.forBaseline) {
           const tb1Diff = numOrLast(teamTb1[b]) - numOrLast(teamTb1[a]);
           if (tb1Diff !== 0) return tb1Diff;
           const tb2Diff = numOrLast(teamTb2[b]) - numOrLast(teamTb2[a]);
@@ -3434,6 +3585,17 @@ async function runPipeline() {
       };
     });
 
+    // What-if: pair each team with its result from the comparison run (null if it wasn't in that run).
+    results.forEach(r => { r.base = opts.baseline ? (opts.baseline[r.team] || null) : null; });
+    if (!opts.forBaseline) {
+      renderWhatIfBanner(opts.baseline ? results : null, isManual);
+      // The copy-to-manual button needs a real quals schedule to copy; remember the data it will copy.
+      if (!isManual) {
+        lastRealEvent = { season, code, title: (eventInfo && eventInfo.name) || code, start: eventStart, matches };
+        document.getElementById('whatIfRow').style.display = matches.some(m => m.tournamentLevel === 'Quals') ? 'flex' : 'none';
+      }
+    }
+
     // Hides the whole Finish column (see #resultsTable.noFinish in the stylesheet) rather than leaving
     // it sitting there as a column of nothing but dashes — covers both a quals-only event (no playoff
     // matches at all) and a normal event whose playoffs just haven't been decided yet.
@@ -3522,6 +3684,7 @@ async function runPipeline() {
       XLSX.writeFile(wb, `${code}_OPR_SOS.xlsx`);
     };
     document.getElementById('downloadRow').style.display = 'block';
+    ok = true;
 
   } catch (err) {
     log('Error: ' + err.message);
@@ -3529,6 +3692,51 @@ async function runPipeline() {
   } finally {
     runBtn.disabled = false;
     document.getElementById('spinner').classList.remove('active');
+  }
+  return ok;
+}
+
+// ---- What-if comparison ----
+// Two things can be compared against a baseline run, and both just run the whole pipeline twice (with
+// ftcscout responses reused) and diff the per-team results:
+//   * ?unplay= on a real event — baseline is the same event with nothing unplayed.
+//   * a manual event copied from a real one — baseline is the original scores it was copied with.
+function snapshotResults() {
+  const s = {};
+  results.forEach(r => { s[r.team] = { rank: r.rank, avgRp: r.avgRp, oprCalc: r.oprCalc, ccwm: r.ccwm, w: r.actualWins, l: r.actualLosses, t: r.actualTies }; });
+  return s;
+}
+
+async function runPipeline() {
+  if (pipelineBusy) return;
+  pipelineBusy = true;
+  try {
+    const preserveView = preserveViewOnce; // a manual-event score save keeps the user's view across its recompute
+    preserveViewOnce = false;
+    const isManual = document.getElementById('eventCode').value.trim().toUpperCase() === MANUAL_EVENT_CODE;
+    if (!isManual) sessionFetchCache.clear(); // a real event always refetches; its two what-if passes then share the result
+    let baseline = null;
+    if (!isManual && excludeMatchNumbers.size) {
+      const held = [...excludeMatchNumbers];
+      excludeMatchNumbers.clear();
+      let ok = false;
+      try { ok = await runPipelineOnce({ preserveView, cacheFetches: true, quiet: true, forBaseline: true }); }
+      finally { held.forEach(n => excludeMatchNumbers.add(n)); }
+      if (ok) baseline = snapshotResults();
+    } else if (isManual && manualBaseline) {
+      if (!manualBaselineSnapshot) {
+        const current = manualScores;
+        manualScores = manualBaseline.scores;
+        let ok = false;
+        try { ok = await runPipelineOnce({ preserveView: true, quiet: true, forBaseline: true }); }
+        finally { manualScores = current; }
+        if (ok) manualBaselineSnapshot = snapshotResults();
+      }
+      baseline = manualBaselineSnapshot;
+    }
+    await runPipelineOnce({ preserveView, cacheFetches: !isManual && !!baseline, baseline });
+  } finally {
+    pipelineBusy = false;
   }
 }
 document.getElementById('runBtn').addEventListener('click', runPipeline);
