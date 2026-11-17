@@ -174,7 +174,7 @@
      run(). Deliberately reuses the #relatedEvents secondary-button look rather than inventing a new one. */
   #bracketBtnRow { display: none; gap: 8px; flex-wrap: wrap; margin: -4px 0 14px; }
   #forecastBanner { display: none; background: var(--banner-bg); border: 1px solid var(--banner-border); color: var(--banner-text); font-size: 13px; padding: 10px 14px; border-radius: 6px; margin: 0 0 16px; }
-  #whatIfRow { display: none; gap: 8px; flex-wrap: wrap; margin: -4px 0 14px; }
+  #whatIfRow { display: none; gap: 8px; flex-wrap: wrap; align-items: center; margin: 4px 0 12px; }
   #whatIfBanner { display: none; background: var(--banner-bg); border: 1px solid var(--banner-border); color: var(--banner-text); font-size: 13px; padding: 10px 14px; border-radius: 6px; margin: 0 0 16px; }
   #whatIfBanner .wiActions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
   #whatIfBanner .wiNote { margin-top: 6px; font-size: 12px; opacity: 0.85; }
@@ -287,6 +287,10 @@
       <label for="advColor">Default highlight color</label>
       <input type="text" id="advColor" placeholder="#4B9CD3 (Carolina Blue)">
     </div>
+    <div id="whatIfRow">
+      <button id="whatIfCopyBtn" type="button" class="secondary" title="Copies this event's schedule and every score into the Manual event panel, where you can change a score and see how rankings and OPR would have moved">✎ What-if: copy to a manual event</button>
+      <span class="note">Copies the event shown below into the Manual event panel so you can change scores and see what moves.</span>
+    </div>
     <p class="note">Dark mode uses the toggle above — its current on/off state is included automatically.</p>
     <div class="advActions">
       <button type="button" id="advApplyBtn">Apply</button>
@@ -328,7 +332,6 @@
 <h2 id="eventName"></h2>
 <div id="relatedEvents"></div>
 <div id="bracketBtnRow"><button id="bracketBtn" type="button" class="secondary">🏆 Playoff Bracket ↗</button></div>
-<div id="whatIfRow"><button id="whatIfCopyBtn" type="button" class="secondary" title="Copies this event's schedule and every score into the Manual event panel, where you can change a score and see how rankings and OPR would have moved">✎ What-if: copy to a manual event</button></div>
 <div id="whatIfBanner"></div>
 
 <div id="forecastBanner">No matches have been played at this event yet. OPR (Event) and Actual record will stay blank until matches are played &mdash; everything else, including Strength of Schedule and Predicted record, is already computed from the posted schedule using Pre-event / Current OPR.</div>
@@ -2482,7 +2485,8 @@ function renderManualScoreUi(focusRed) {
       <button type="button" id="manualSaveBtn">Save &amp; next</button>
       ${manualScores[m.n] ? '<button type="button" id="manualDelBtn" class="secondary">Clear this score</button>' : ''}
     </div>`;
-  if (focusRed) { const el = document.getElementById('msRs'); if (el) el.focus(); }
+  // preventScroll: after a save the card is already where the user is looking, so don't let the focus jump the page.
+  if (focusRed) { const el = document.getElementById('msRs'); if (el) el.focus({ preventScroll: true }); }
 }
 
 function manualScoreMsg(text) {
@@ -2493,11 +2497,23 @@ function manualScoreMsg(text) {
 // Recomputes the whole table from the stored schedule and scores (cached team lookups make this
 // quick), keeping the page where it was and the user's sort / Strength Calc choice / expanded rows.
 async function recomputeManual() {
+  // A recompute briefly hides the results table (and opens the log), so the page gets much shorter
+  // mid-run and a phone browser clamps the scroll position to the bottom of what is left. Holding the
+  // page height steady stops that, and afterwards the score card is put back exactly where it was on
+  // screen (more dependable on a phone than restoring an absolute scroll offset).
   const y = window.scrollY;
+  const cardVisible = manualScoreCardEl.offsetParent !== null;
+  const topBefore = cardVisible ? manualScoreCardEl.getBoundingClientRect().top : 0;
+  document.body.style.minHeight = document.documentElement.scrollHeight + 'px';
   preserveViewOnce = true;
   eventCodeInput.value = MANUAL_EVENT_CODE;
   try { await runPipeline(); } finally { preserveViewOnce = false; }
-  window.scrollTo(0, y);
+  if (cardVisible && manualScoreCardEl.offsetParent !== null) {
+    window.scrollTo(0, window.scrollY + (manualScoreCardEl.getBoundingClientRect().top - topBefore));
+  } else {
+    window.scrollTo(0, y);
+  }
+  document.body.style.minHeight = '';
 }
 
 async function saveManualScore() {
